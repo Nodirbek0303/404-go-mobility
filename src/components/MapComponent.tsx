@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Navigation, Loader2, MapPin } from "lucide-react";
+import { EV_STATIONS, PARKING_LOTS } from "../servicePoints";
 
 // Predefined landmark coordinates for Uzbekistan Super App
 export const TASHKENT_LOCATIONS = [
@@ -33,6 +34,8 @@ interface MapComponentProps {
   pinMode?: "from" | "to" | null;
   customFromCoords?: { latitude: number; longitude: number } | null;
   customToCoords?: { latitude: number; longitude: number } | null;
+  serviceMode?: "taxi" | "delivery" | "cargo" | "parking" | "ev_charge" | null;
+  selectedServicePointId?: string | null;
 }
 
 export default function MapComponent({
@@ -46,6 +49,8 @@ export default function MapComponent({
   pinMode = null,
   customFromCoords = null,
   customToCoords = null,
+  serviceMode = null,
+  selectedServicePointId = null,
 }: MapComponentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [trafficMode, setTrafficMode] = useState<"tez" | "ortacha" | "sekin">("tez");
@@ -281,20 +286,47 @@ export default function MapComponent({
       ctx.lineTo(w * 0.5, h * 0.45);
       ctx.stroke();
 
-      // Plot all reference landmarks on map visually
-      TASHKENT_LOCATIONS.forEach((loc) => {
-        const p = getCanvasXY(loc.name.uz, { latitude: loc.lat, longitude: loc.lng }, w, h);
-        
-        ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(156, 163, 175, 0.4)";
-        ctx.font = "7px sans-serif";
-        const label = loc.name[lang as "uz" | "en" | "ru"] || loc.name.uz;
-        ctx.fillText(label, p.x + 5, p.y + 2);
-      });
+      // Service-specific POIs (parking / EV only on map)
+      if (serviceMode === "parking") {
+        PARKING_LOTS.forEach((lot) => {
+          const p = getCanvasXY(lot.name.uz, { latitude: lot.lat, longitude: lot.lng }, w, h);
+          const selected = lot.id === selectedServicePointId;
+          ctx.fillStyle = selected ? "#22d3ee" : "rgba(34, 211, 238, 0.35)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, selected ? 9 : 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = selected ? "#ffffff" : "rgba(34, 211, 238, 0.9)";
+          ctx.font = selected ? "bold 8px sans-serif" : "7px sans-serif";
+          const label = lot.name[lang as "uz" | "en" | "ru"] || lot.name.uz;
+          ctx.fillText(`P ${label}`, p.x + 8, p.y + 2);
+        });
+      } else if (serviceMode === "ev_charge") {
+        EV_STATIONS.forEach((st) => {
+          const p = getCanvasXY(st.name.uz, { latitude: st.lat, longitude: st.lng }, w, h);
+          const selected = st.id === selectedServicePointId;
+          ctx.fillStyle = selected ? "#a855f7" : "rgba(168, 85, 247, 0.35)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, selected ? 9 : 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = selected ? "#ffffff" : "rgba(196, 181, 253, 0.95)";
+          ctx.font = selected ? "bold 8px sans-serif" : "7px sans-serif";
+          const label = st.name[lang as "uz" | "en" | "ru"] || st.name.uz;
+          ctx.fillText(`⚡ ${label}`, p.x + 8, p.y + 2);
+        });
+      } else {
+        // General landmarks (taxi / delivery / cargo routes)
+        TASHKENT_LOCATIONS.forEach((loc) => {
+          const p = getCanvasXY(loc.name.uz, { latitude: loc.lat, longitude: loc.lng }, w, h);
+          ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(156, 163, 175, 0.4)";
+          ctx.font = "7px sans-serif";
+          const label = loc.name[lang as "uz" | "en" | "ru"] || loc.name.uz;
+          ctx.fillText(label, p.x + 5, p.y + 2);
+        });
+      }
 
       // Route Display (Starts when either manual pins or active orders are loaded)
       if (showRoute) {
@@ -310,14 +342,25 @@ export default function MapComponent({
         const ty = (ay + by) / 2 + (ax - bx) * 0.15;
 
         // Draw neon trace line behind path
-        ctx.strokeStyle = "rgba(20, 184, 166, 0.15)";
+        const routeGlow =
+          serviceMode === "cargo"
+            ? "rgba(59, 130, 246, 0.15)"
+            : serviceMode === "delivery"
+              ? "rgba(249, 115, 22, 0.15)"
+              : "rgba(20, 184, 166, 0.15)";
+        const routeLine =
+          serviceMode === "cargo" ? "#3b82f6" : serviceMode === "delivery" ? "#f97316" : "#14b8a6";
+        const vehicleColor =
+          serviceMode === "cargo" ? "#3b82f6" : serviceMode === "delivery" ? "#f97316" : "#14b8a6";
+
+        ctx.strokeStyle = routeGlow;
         ctx.lineWidth = 8;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.quadraticCurveTo(tx, ty, bx, by);
         ctx.stroke();
 
-        ctx.strokeStyle = "#14b8a6";
+        ctx.strokeStyle = routeLine;
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
@@ -359,13 +402,15 @@ export default function MapComponent({
         // Radar waves
         const wave = (Date.now() % 1200) / 1200;
         ctx.strokeStyle = `rgba(20, 184, 166, ${1 - wave})`;
+        if (serviceMode === "cargo") ctx.strokeStyle = `rgba(59, 130, 246, ${1 - wave})`;
+        if (serviceMode === "delivery") ctx.strokeStyle = `rgba(249, 115, 22, ${1 - wave})`;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(cx, cy, 5 + 15 * wave, 0, Math.PI * 2);
         ctx.stroke();
 
         // Driver pinpoint bubble
-        ctx.fillStyle = "#14b8a6";
+        ctx.fillStyle = vehicleColor;
         ctx.beginPath();
         ctx.arc(cx, cy - 10, 6, 0, Math.PI * 2);
         ctx.fill();
@@ -416,7 +461,7 @@ export default function MapComponent({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [trafficMode, carProgress, showRoute, activeFrom, activeTo, customFromCoords, customToCoords, userCoords, lang]);
+  }, [trafficMode, carProgress, showRoute, activeFrom, activeTo, customFromCoords, customToCoords, userCoords, lang, serviceMode, selectedServicePointId]);
 
   return (
     <div className="relative w-full h-full min-h-[220px] rounded-xl overflow-hidden border border-slate-800 bg-[#0c111d] flex flex-col group">

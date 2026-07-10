@@ -2,39 +2,57 @@ export function getSimulatedResponse(prompt: string, lang: string): string {
   const text = prompt.toLowerCase();
 
   if (lang === "uz") {
-    if (text.includes("taksi") || text.includes("mashina") || text.includes("borish") || text.includes("qayerga")) {
-      return "Albatta! Siz uchun eng tezkor taksi xizmatini taklif qilaman. Chorsu maydonidan Magic City bog'igacha yo'nalish tayyor. Yo'l haqi: 28 000 so'm. Tasdiqlaysizmi?\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
+    if (text.includes("taksi") || (text.includes("mashina") && !text.includes("yuk") && !text.includes("yengil"))) {
+      return "Taksi chaqiraman — yengil avtomobil yo'lovchi tashish uchun. Chorsu → Magic City, ~28 000 so'm.\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
     }
-    if (text.includes("hujjat") || text.includes("kuryer") || text.includes("dostavka") || text.includes("yetkaz")) {
-      return "Kuryerlik xizmatini rasmiylashtirishga yordam beraman. 'Hujjatlar' paketi yetkazib berish narxi 35 000 so'm. Tayyormisiz?\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar, price=35000]";
+    if (text.includes("hujjat") || text.includes("kuryer") || text.includes("pochta") || text.includes("yetkaz") || text.includes("posilka")) {
+      return "Yetkazib berish — faqat yengil mashina (Damas/Matiz). Pochta va hujjatlar uchun kuryer yuboraman. Narx: 35 000 so'm.\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar/Pochta, price=35000]";
     }
-    if (text.includes("yuk") || text.includes("gruz") || text.includes("tonna")) {
-      return "Yuk tashish xizmatini rasmiylashtirishga yordam beraman. 1.5 tonna yuk uchun narxi taxminan 210 000 so'm. Tasdiqlaysizmi?\n\n[BOOKING_ACTION: type=cargo, from=Qo'yliq, to=Sebzor, price=210000]";
+    if (text.includes("yuk") || text.includes("gruz") || text.includes("tonna") || text.includes("gazelle") || text.includes("kamaz")) {
+      return "Yuk tashish — faqat yuk mashinasi (Gazelle/Isuzu/Kamaz). 1.5 tonna yuk uchun ~210 000 so'm.\n\n[BOOKING_ACTION: type=cargo, from=Qo'yliq, to=Sebzor, price=210000]";
     }
     if (text.includes("parking") || text.includes("parkovka") || text.includes("to'xtash")) {
-      return "Eng yaqin Smart Parking joyini topdim! Tashkent City hududida bo'sh joy mavjud. Narxi: 8 000 so'm/soat. Band qilamizmi?\n\n[BOOKING_ACTION: type=parking, from=Tashkent City, price=8000]";
+      return "Smart Parking — faqat parkovkalar. Tashkent City P1 da 34 ta bo'sh joy. 8 000 so'm/soat.\n\n[BOOKING_ACTION: type=parking, from=Tashkent City P1, price=8000]";
     }
-    if (text.includes("zaryad") || text.includes("ev") || text.includes("elektr")) {
-      return "Eng yaqin EV zaryadlash stansiyasi Magic City yaqinida. 30 daqiqalik zaryadlash narxi 15 000 so'm. Band qilamizmi?\n\n[BOOKING_ACTION: type=ev_charge, from=Magic City, price=15000]";
+    if (text.includes("zaryad") || text.includes("ev") || text.includes("elektr") || text.includes("zapravka")) {
+      return "EV zaryadlash — faqat zaryad stansiyalari. Magic City EV Hub, 50kW, 15 000 so'm/30 daqiqa.\n\n[BOOKING_ACTION: type=ev_charge, from=EV Hub Magic City, price=15000]";
     }
-    return "Salom! Men 404-GO AI aqlli mobil yordamchisiman. Sizga taksi chaqirish, yetkazib berish, yuk tashish, smart parking va EV zaryadlashda yordam beraman. Bugun qanday xizmat kerak?";
+    return "Salom! Men 404-GO AI yordamchisiman: taksi, pochta yetkazish (yengil mashina), yuk tashish (yuk mashinasi), parkovka va EV zaryad. Qaysi xizmat kerak?";
   }
 
   if (lang === "ru") {
-    if (text.includes("такси") || text.includes("машин") || text.includes("ехать") || text.includes("куда")) {
-      return "Конечно! Я подберу для вас самое быстрое такси. Маршрут от Чорсу до Magic City готов. Стоимость поездки: 28 000 сум. Подтверждаете?\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
+    if (text.includes("такси")) {
+      return "Вызову такси — легковой автомобиль. Чорсу → Magic City, ~28 000 сум.\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
     }
-    if (text.includes("доставк") || text.includes("курьер") || text.includes("документ")) {
-      return "Я помогу оформить курьерскую доставку. Стоимость доставки документов: 35 000 сум. Оформляем?\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar, price=35000]";
+    if (text.includes("доставк") || text.includes("курьер") || text.includes("почт") || text.includes("посыл")) {
+      return "Доставка — только легковые авто (Damas/Matiz). Почта и документы, 35 000 сум.\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar/Pochta, price=35000]";
     }
-    return "Привет! Я умный помощник 404-GO. Я могу помочь вам вызвать такси, заказать доставку, перевезти груз, найти парковку или зарядить электромобиль. Какая услуга нужна?";
+    if (text.includes("груз") || text.includes("тонн")) {
+      return "Грузоперевозки — только грузовики. ~210 000 сум.\n\n[BOOKING_ACTION: type=cargo, from=Qo'yliq, to=Sebzor, price=210000]";
+    }
+    if (text.includes("парк") || text.includes("стоянк")) {
+      return "Парковка — только парковочные зоны. Tashkent City P1, 8000 сум/час.\n\n[BOOKING_ACTION: type=parking, from=Tashkent City P1, price=8000]";
+    }
+    if (text.includes("заряд") || text.includes("ev") || text.includes("электр")) {
+      return "Зарядка EV — только зарядные станции. Magic City EV Hub, 15 000 сум.\n\n[BOOKING_ACTION: type=ev_charge, from=EV Hub Magic City, price=15000]";
+    }
+    return "Привет! Я помощник 404-GO: такси, доставка почты, грузовики, парковки и EV зарядка.";
   }
 
-  if (text.includes("taxi") || text.includes("ride") || text.includes("car") || text.includes("go to")) {
-    return "Sure! I will match you with the fastest taxi. Route from Chorsu to Magic City is ready. Fare: 28,000 UZS. Would you like to confirm?\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
+  if (text.includes("taxi") || text.includes("ride")) {
+    return "Taxi — passenger car only. Chorsu → Magic City, ~28,000 UZS.\n\n[BOOKING_ACTION: type=taxi, from=Chorsu, to=Magic City, price=28000]";
   }
-  if (text.includes("delivery") || text.includes("courier") || text.includes("document")) {
-    return "I can help you arrange a courier delivery. Document delivery costs 35,000 UZS. Shall we proceed?\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar, price=35000]";
+  if (text.includes("delivery") || text.includes("courier") || text.includes("mail") || text.includes("parcel")) {
+    return "Delivery — light vehicles only (Damas/Matiz) for mail and parcels. 35,000 UZS.\n\n[BOOKING_ACTION: type=delivery, item=Hujjatlar/Pochta, price=35000]";
   }
-  return "Hello! I am 404-GO AI Smart Assistant. I can help you call a taxi, arrange delivery, transport cargo, find smart parking, or locate EV charging. What service do you need today?";
+  if (text.includes("cargo") || text.includes("freight") || text.includes("truck")) {
+    return "Cargo — freight trucks only. ~210,000 UZS.\n\n[BOOKING_ACTION: type=cargo, from=Qo'yliq, to=Sebzor, price=210000]";
+  }
+  if (text.includes("parking")) {
+    return "Parking lots only. Tashkent City P1, 8,000 UZS/hour.\n\n[BOOKING_ACTION: type=parking, from=Tashkent City P1, price=8000]";
+  }
+  if (text.includes("ev") || text.includes("charg")) {
+    return "EV charging stations only. Magic City EV Hub, 15,000 UZS.\n\n[BOOKING_ACTION: type=ev_charge, from=EV Hub Magic City, price=15000]";
+  }
+  return "Hello! I am 404-GO AI: taxi, mail delivery (light cars), cargo trucks, parking lots, and EV charging.";
 }

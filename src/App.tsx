@@ -57,7 +57,21 @@ import { Language, Booking, ChatMessage, TransitRoute, UserProfile } from "./typ
 import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
 import UIUXShowcase from "./components/UIUXShowcase";
 import TaxiRidePanel from "./components/TaxiRidePanel";
-import { googleMapsDirections, openExternalMap, twoGisPoint, yandexNavigatorRoute } from "./utils/mapProviders";
+import {
+  CARGO_TRUCKS,
+  DELIVERY_VEHICLES,
+  PARCEL_TYPES,
+  PARKING_LOTS,
+  EV_STATIONS,
+  SERVICE_ROLE_HINTS,
+  localizedName,
+} from "./servicePoints";
+import {
+  googleMapsDirections,
+  openExternalMap,
+  twoGisPoint,
+  yandexNavigatorRoute,
+} from "./utils/mapProviders";
 
 type BookingType = Booking["type"];
 const SINGLE_LOCATION_SERVICES = ["parking", "ev_charge"];
@@ -333,6 +347,37 @@ export default function App() {
   const [customFromCoords, setCustomFromCoords] = useState<{ latitude: number; longitude: number } | null>({ latitude: 41.3216, longitude: 69.2285 });
   const [customToCoords, setCustomToCoords] = useState<{ latitude: number; longitude: number } | null>({ latitude: 41.3031, longitude: 69.2486 });
   const [pinMode, setPinMode] = useState<"from" | "to" | null>(null);
+  const [selectedCargoTruck, setSelectedCargoTruck] = useState(CARGO_TRUCKS[0].id);
+  const [selectedDeliveryVehicle, setSelectedDeliveryVehicle] = useState(DELIVERY_VEHICLES[1].id);
+  const [selectedParcelType, setSelectedParcelType] = useState(PARCEL_TYPES[0].id);
+  const [cargoWeightTon, setCargoWeightTon] = useState("1.5");
+  const [selectedParkingId, setSelectedParkingId] = useState(PARKING_LOTS[0].id);
+  const [selectedEvStationId, setSelectedEvStationId] = useState(EV_STATIONS[0].id);
+
+  const applyParkingLot = (id: string) => {
+    const lot = PARKING_LOTS.find((p) => p.id === id);
+    if (!lot) return;
+    setSelectedParkingId(id);
+    setDirectFromText(localizedName(lot, lang));
+    setCustomFromCoords({ latitude: lot.lat, longitude: lot.lng });
+    setDirectToText("");
+    setCustomToCoords(null);
+  };
+
+  const applyEvStation = (id: string) => {
+    const st = EV_STATIONS.find((s) => s.id === id);
+    if (!st) return;
+    setSelectedEvStationId(id);
+    setDirectFromText(localizedName(st, lang));
+    setCustomFromCoords({ latitude: st.lat, longitude: st.lng });
+    setDirectToText("");
+    setCustomToCoords(null);
+  };
+
+  useEffect(() => {
+    if (directBookingService === "parking") applyParkingLot(selectedParkingId);
+    if (directBookingService === "ev_charge") applyEvStation(selectedEvStationId);
+  }, [directBookingService, lang]);
 
   // Clear historical route viewing if a new direct booking flow starts
   useEffect(() => {
@@ -595,6 +640,62 @@ export default function App() {
     setUseCashbackAsPayment(false);
 
     const isTaxi = pendingBooking.type === "taxi";
+    const cargoTruck = CARGO_TRUCKS.find((t) => t.id === selectedCargoTruck);
+    const deliveryVehicle = DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle);
+    const parcel = PARCEL_TYPES.find((p) => p.id === selectedParcelType);
+    const parkingLot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
+    const evStation = EV_STATIONS.find((s) => s.id === selectedEvStationId);
+
+    const serviceDriverInfo = (() => {
+      if (pendingBooking.type === "cargo" && cargoTruck) {
+        return {
+          driverName: "Yuk haydovchisi",
+          carName: localizedName(cargoTruck, lang),
+          carNumber: cargoTruck.plate,
+        };
+      }
+      if (pendingBooking.type === "delivery" && deliveryVehicle) {
+        return {
+          driverName: "Kuryer",
+          carName: `${localizedName(deliveryVehicle, lang)} · ${parcel ? localizedName(parcel, lang) : "Pochta"}`,
+          carNumber: deliveryVehicle.plate,
+        };
+      }
+      if (pendingBooking.type === "parking" && parkingLot) {
+        return {
+          driverName: "Smart Parking",
+          carName: localizedName(parkingLot, lang),
+          carNumber: `${parkingLot.freeSpots}/${parkingLot.spots} joy`,
+        };
+      }
+      if (pendingBooking.type === "ev_charge" && evStation) {
+        return {
+          driverName: "EV Station",
+          carName: localizedName(evStation, lang),
+          carNumber: `${evStation.connectors} · ${evStation.powerKw}kW`,
+        };
+      }
+      return {
+        driverName: ["Sardor Alimov", "Rustam Pozilov", "Dina Ahmedova", "Aleksey Smirnov"][
+          Math.floor(Math.random() * 4)
+        ],
+        carName: ["BYD Song Plus", "Chevrolet Onix", "Kia K5", "Tesla Model 3"][
+          Math.floor(Math.random() * 4)
+        ],
+        carNumber: ["01 A 777 AA", "01 D 345 AB", "01 B 123 AB", "01 M 888 MA"][
+          Math.floor(Math.random() * 4)
+        ],
+      };
+    })();
+
+    const statusForType = () => {
+      if (isTaxi) return { uz: "Haydovchi qidirilmoqda", en: "Finding driver", ru: "Поиск водителя" };
+      if (pendingBooking.type === "cargo") return { uz: "Yuk mashinasi tayinlandi", en: "Cargo truck assigned", ru: "Грузовик назначен" };
+      if (pendingBooking.type === "delivery") return { uz: "Kuryer pochta olib ketmoqda", en: "Courier picking up mail", ru: "Курьер забирает посылку" };
+      if (pendingBooking.type === "parking") return { uz: "Parkovka band qilindi", en: "Parking spot reserved", ru: "Место забронировано" };
+      if (pendingBooking.type === "ev_charge") return { uz: "Zaryad stansiyasi tayyor", en: "Charging station ready", ru: "Станция готова" };
+      return { uz: "Bajarilmoqda", en: "In progress", ru: "Выполняется" };
+    };
 
     const newOrder: Booking = {
       id: `order-${Date.now()}`,
@@ -608,17 +709,7 @@ export default function App() {
       price: pendingBooking.price,
       date: "Hozirgina",
       status: "active",
-      statusText: isTaxi
-        ? {
-            uz: "Haydovchi qidirilmoqda",
-            en: "Finding driver",
-            ru: "Поиск водителя",
-          }
-        : {
-            uz: "Bajarilmoqda",
-            en: "In progress",
-            ru: "Выполняется",
-          },
+      statusText: statusForType(),
       from: pendingBooking.from,
       to: pendingBooking.to,
       fromCoords: pendingBooking.fromCoords ?? customFromCoords ?? undefined,
@@ -629,18 +720,12 @@ export default function App() {
             driverChat: [],
           }
         : {
-            driverName: ["Sardor Alimov", "Rustam Pozilov", "Dina Ahmedova", "Aleksey Smirnov"][
-              Math.floor(Math.random() * 4)
-            ],
-            carName: ["BYD Song Plus", "Chevrolet Onix", "Kia K5", "Tesla Model 3"][
-              Math.floor(Math.random() * 4)
-            ],
-            carNumber: ["01 A 777 AA", "01 D 345 AB", "01 B 123 AB", "01 M 888 MA"][
-              Math.floor(Math.random() * 4)
-            ],
+            driverName: serviceDriverInfo.driverName,
+            carName: serviceDriverInfo.carName,
+            carNumber: serviceDriverInfo.carNumber,
             rating: parseFloat((4.7 + Math.random() * 0.3).toFixed(2)),
-            duration: "18 daqiqa",
-            distance: "12.4 km",
+            duration: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "1 soat" : "18 daqiqa",
+            distance: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "—" : "12.4 km",
           }),
     };
 
@@ -942,10 +1027,24 @@ export default function App() {
   // Get dynamic calculated price with coupon applied
   const getCalculatedPrice = () => {
     let base = 12000;
-    if (directBookingService === "delivery") base = 9000;
-    if (directBookingService === "cargo") base = 180000;
-    if (directBookingService === "parking") base = 8000;
-    if (directBookingService === "ev_charge") base = 15000;
+    if (directBookingService === "delivery") {
+      const vehicle = DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle);
+      const parcel = PARCEL_TYPES.find((p) => p.id === selectedParcelType);
+      base = Math.round(9000 * (vehicle?.priceMultiplier ?? 1) + (parcel?.priceAdd ?? 0));
+    }
+    if (directBookingService === "cargo") {
+      const truck = CARGO_TRUCKS.find((t) => t.id === selectedCargoTruck);
+      const weight = parseFloat(cargoWeightTon) || 1.5;
+      base = Math.round(180000 * (truck?.priceMultiplier ?? 1) * Math.max(1, weight / (truck?.capacityTon ?? 1.5)));
+    }
+    if (directBookingService === "parking") {
+      const lot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
+      base = lot?.pricePerHour ?? 8000;
+    }
+    if (directBookingService === "ev_charge") {
+      const st = EV_STATIONS.find((s) => s.id === selectedEvStationId);
+      base = st?.pricePer30Min ?? 15000;
+    }
     
     let price = base;
     if (customFromCoords && customToCoords && !SINGLE_LOCATION_SERVICES.includes(directBookingService || "")) {
@@ -1774,6 +1873,154 @@ export default function App() {
                             </button>
                           </div>
 
+                          {SERVICE_ROLE_HINTS[directBookingService] && (
+                            <p className="text-[9px] text-teal-400/90 leading-snug bg-teal-500/5 border border-teal-500/15 rounded-lg px-2 py-1.5">
+                              {SERVICE_ROLE_HINTS[directBookingService][lang]}
+                            </p>
+                          )}
+
+                          {directBookingService === "delivery" && (
+                            <div className="space-y-2">
+                              <div>
+                                <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                  {lang === "uz" ? "Yengil mashina (pochta/zakaz)" : lang === "ru" ? "Легковой авто (почта)" : "Light vehicle (mail)"}
+                                </label>
+                                <div className="grid grid-cols-2 gap-1 mt-1">
+                                  {DELIVERY_VEHICLES.map((v) => (
+                                    <button
+                                      key={v.id}
+                                      type="button"
+                                      onClick={() => setSelectedDeliveryVehicle(v.id)}
+                                      className={`text-left p-1.5 rounded-lg border text-[8px] transition ${
+                                        selectedDeliveryVehicle === v.id
+                                          ? "border-orange-400/60 bg-orange-500/10 text-orange-300"
+                                          : "border-slate-800 bg-slate-900 text-gray-400"
+                                      }`}
+                                    >
+                                      <span className="font-bold block">{localizedName(v, lang)}</span>
+                                      <span className="opacity-70">{localizedName({ name: v.role }, lang)}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                  {lang === "uz" ? "Pochta / posilka turi" : lang === "ru" ? "Тип посылки" : "Parcel type"}
+                                </label>
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {PARCEL_TYPES.map((p) => (
+                                    <button
+                                      key={p.id}
+                                      type="button"
+                                      onClick={() => setSelectedParcelType(p.id)}
+                                      className={`text-[8px] px-2 py-1 rounded-full border transition ${
+                                        selectedParcelType === p.id
+                                          ? "border-orange-400 bg-orange-500/15 text-orange-300 font-bold"
+                                          : "border-slate-800 text-gray-400"
+                                      }`}
+                                    >
+                                      {localizedName(p, lang)}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {directBookingService === "cargo" && (
+                            <div className="space-y-2">
+                              <div>
+                                <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                  {lang === "uz" ? "Yuk mashinasi" : lang === "ru" ? "Грузовик" : "Cargo truck"}
+                                </label>
+                                <div className="grid grid-cols-2 gap-1 mt-1">
+                                  {CARGO_TRUCKS.map((t) => (
+                                    <button
+                                      key={t.id}
+                                      type="button"
+                                      onClick={() => setSelectedCargoTruck(t.id)}
+                                      className={`text-left p-1.5 rounded-lg border text-[8px] transition ${
+                                        selectedCargoTruck === t.id
+                                          ? "border-blue-400/60 bg-blue-500/10 text-blue-300"
+                                          : "border-slate-800 bg-slate-900 text-gray-400"
+                                      }`}
+                                    >
+                                      <span className="font-bold block">{localizedName(t, lang)}</span>
+                                      <span className="opacity-70">{t.plate}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                  {lang === "uz" ? "Yuk og'irligi (tonna)" : lang === "ru" ? "Вес груза (т)" : "Cargo weight (t)"}
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0.1"
+                                  step="0.1"
+                                  value={cargoWeightTon}
+                                  onChange={(e) => setCargoWeightTon(e.target.value)}
+                                  className="mt-1 w-full bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:border-blue-400 outline-none"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {directBookingService === "parking" && (
+                            <div>
+                              <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                {lang === "uz" ? "Parkovka tanlang" : lang === "ru" ? "Выберите парковку" : "Select parking lot"}
+                              </label>
+                              <div className="grid grid-cols-1 gap-1 mt-1">
+                                {PARKING_LOTS.map((lot) => (
+                                  <button
+                                    key={lot.id}
+                                    type="button"
+                                    onClick={() => applyParkingLot(lot.id)}
+                                    className={`text-left p-2 rounded-lg border text-[9px] transition ${
+                                      selectedParkingId === lot.id
+                                        ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-200"
+                                        : "border-slate-800 bg-slate-900 text-gray-400"
+                                    }`}
+                                  >
+                                    <span className="font-bold block">{localizedName(lot, lang)}</span>
+                                    <span className="opacity-70">
+                                      {lot.freeSpots} {lang === "uz" ? "bo'sh joy" : lang === "ru" ? "свободно" : "free"} · {lot.pricePerHour.toLocaleString()} so'm/soat
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {directBookingService === "ev_charge" && (
+                            <div>
+                              <label className="text-[9px] text-gray-500 uppercase tracking-wider">
+                                {lang === "uz" ? "Zaryad stansiyasi" : lang === "ru" ? "Зарядная станция" : "Charging station"}
+                              </label>
+                              <div className="grid grid-cols-1 gap-1 mt-1">
+                                {EV_STATIONS.map((st) => (
+                                  <button
+                                    key={st.id}
+                                    type="button"
+                                    onClick={() => applyEvStation(st.id)}
+                                    className={`text-left p-2 rounded-lg border text-[9px] transition ${
+                                      selectedEvStationId === st.id
+                                        ? "border-violet-400/60 bg-violet-500/10 text-violet-200"
+                                        : "border-slate-800 bg-slate-900 text-gray-400"
+                                    }`}
+                                  >
+                                    <span className="font-bold block">{localizedName(st, lang)}</span>
+                                    <span className="opacity-70">
+                                      {st.connectors} · {st.powerKw}kW · {st.freePorts} {lang === "uz" ? "port" : "port"}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
                           {directBookingService === "taxi" && customFromCoords && customToCoords && (
                             <div className="grid grid-cols-3 gap-1 mt-1">
                               <button
@@ -1822,6 +2069,16 @@ export default function App() {
                           <div className="h-28 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner mt-1">
                             <MapComponent
                               pinMode={pinMode}
+                              serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
+                              selectedServicePointId={
+                                directBookingService === "parking"
+                                  ? selectedParkingId
+                                  : directBookingService === "ev_charge"
+                                    ? selectedEvStationId
+                                    : null
+                              }
+                              showRoute={!SINGLE_LOCATION_SERVICES.includes(directBookingService)}
+                              lang={lang}
                               customFromCoords={
                                 pinMode === "from" 
                                   ? customFromCoords 
@@ -1830,7 +2087,7 @@ export default function App() {
                               customToCoords={
                                 pinMode === "to" 
                                   ? customToCoords 
-                                  : (directBookingService ? customToCoords : null)
+                                  : (directBookingService && !SINGLE_LOCATION_SERVICES.includes(directBookingService) ? customToCoords : null)
                               }
                               onMapClick={handleMapClick}
                             />
@@ -1853,7 +2110,11 @@ export default function App() {
                           {/* Field A: Starting point */}
                           <div className="space-y-1">
                             <label className="text-[10px] text-gray-400 font-medium">
-                              {lang === "uz" ? "Qayerdan (A nuqta):" : lang === "ru" ? "Откуда (Точка A):" : "Pickup (Point A):"}
+                              {directBookingService === "parking"
+                                ? (lang === "uz" ? "Parkovka joyi:" : lang === "ru" ? "Парковка:" : "Parking lot:")
+                                : directBookingService === "ev_charge"
+                                  ? (lang === "uz" ? "Zaryad stansiyasi:" : lang === "ru" ? "Станция:" : "Charging station:")
+                                  : (lang === "uz" ? "Qayerdan (A nuqta):" : lang === "ru" ? "Откуда (Точка A):" : "Pickup (Point A):")}
                             </label>
                             <div className="flex items-center gap-1">
                               <input
@@ -1939,8 +2200,8 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Predefined Quick Landmark Snaps */}
-                          <div className="space-y-1 pt-1">
+                          {!SINGLE_LOCATION_SERVICES.includes(directBookingService) && (
+                            <div className="space-y-1 pt-1">
                             <span className="text-[9px] text-gray-500 font-mono tracking-wider block uppercase">
                               {lang === "uz" ? "Tezkor tanlash" : lang === "ru" ? "Быстрый выбор" : "Quick select"}
                             </span>
@@ -1967,7 +2228,8 @@ export default function App() {
                                 );
                               })}
                             </div>
-                          </div>
+                            </div>
+                          )}
 
                           {/* Payment Card Selector */}
                           <div className="space-y-1 pt-1">
@@ -2135,15 +2397,18 @@ export default function App() {
                                   onClick={() => {
                                     setDirectBookingService(cat.id);
                                     if (SINGLE_LOCATION_SERVICES.includes(cat.id)) {
-                                      setDirectFromText(lang === "uz" ? "Tashkent City" : lang === "ru" ? "Ташкент Сити" : "Tashkent City");
-                                      setCustomFromCoords({ latitude: 41.3111, longitude: 69.2405 });
-                                      setDirectToText("");
-                                      setCustomToCoords(null);
+                                      if (cat.id === "parking") {
+                                        applyParkingLot(PARKING_LOTS[0].id);
+                                      } else {
+                                        applyEvStation(EV_STATIONS[0].id);
+                                      }
                                     } else {
                                       setDirectFromText(lang === "uz" ? "Chorsu bozori" : lang === "ru" ? "Базар Чорсу" : "Chorsu Bazaar");
                                       setDirectToText(lang === "uz" ? "Magic City bog'i" : lang === "ru" ? "Парк Magic City" : "Magic City Park");
                                       setCustomFromCoords({ latitude: 41.3216, longitude: 69.2285 });
                                       setCustomToCoords({ latitude: 41.3031, longitude: 69.2486 });
+                                      if (cat.id === "cargo") setSelectedCargoTruck(CARGO_TRUCKS[0].id);
+                                      if (cat.id === "delivery") setSelectedDeliveryVehicle(DELIVERY_VEHICLES[1].id);
                                     }
                                   }}
                                   className="nexgo-service-tile flex flex-col items-center justify-center text-center group"
