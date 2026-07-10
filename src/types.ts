@@ -53,8 +53,11 @@ export interface Booking {
   driverLastName?: string;
   etaMinutes?: number;
   driverChat?: DriverChatMessage[];
+  scheduledAt?: string;
+  driverTrips?: number;
+  driverVerified?: boolean;
+  paymentProvider?: PaymentProvider;
 }
-
 export interface DriverChatMessage {
   id: string;
   sender: "user" | "driver";
@@ -86,4 +89,30 @@ export interface UserProfile {
   birthDate: string;
   photoUrl: string | null;
 }
+
+export interface AuthSession {
+  phone: string;
+  verifiedAt: string;
+  token: string;
+}
+
+export interface SavedAddress {
+  id: string;
+  label: { uz: string; en: string; ru: string };
+  address: string;
+  coords?: { latitude: number; longitude: number };
+  icon: "home" | "work" | "custom";
+}
+
+export interface AppNotification {
+  id: string;
+  title: { uz: string; en: string; ru: string };
+  body: { uz: string; en: string; ru: string };
+  type: "order" | "payment" | "promo" | "safety" | "system";
+  read: boolean;
+  createdAt: string;
+  orderId?: string;
+}
+
+export type PaymentProvider = "payme" | "click" | "uzum" | "card";
 

@@ -53,10 +53,25 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { translations } from "./translations";
 import { serviceCategories, initialOrders, transitRoutes } from "./servicesData";
-import { Language, Booking, ChatMessage, TransitRoute, UserProfile } from "./types";
+import { Language, Booking, ChatMessage, TransitRoute, UserProfile, AppNotification, SavedAddress, PaymentProvider, AuthSession } from "./types";
 import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
 import UIUXShowcase from "./components/UIUXShowcase";
 import TaxiRidePanel from "./components/TaxiRidePanel";
+import AuthModal from "./components/customer/AuthModal";
+import NotificationPanel, { createNotification } from "./components/customer/NotificationPanel";
+import SavedAddressesBar from "./components/customer/SavedAddressesBar";
+import PaymentProviderModal from "./components/customer/PaymentProviderModal";
+import SosShareBar, { callDriver } from "./components/customer/SosShareBar";
+import DriverProfileCard from "./components/customer/DriverProfileCard";
+import { useVoiceOrder } from "./hooks/useVoiceOrder";
+import {
+  loadAuth,
+  loadNotifications,
+  loadSavedAddresses,
+  saveNotifications,
+  saveSavedAddresses,
+  clearAuth,
+} from "./utils/customerStorage";
 import {
   CARGO_TRUCKS,
   DELIVERY_VEHICLES,
@@ -189,6 +204,76 @@ export default function App() {
   const [homePhotoMessage, setHomePhotoMessage] = useState<string | null>(null);
   const profilePhotoInputRef = useRef<HTMLInputElement>(null);
 
+  // Customer features: auth, notifications, saved addresses, payments, scheduling
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuth());
+  const [showAuthModal, setShowAuthModal] = useState(() => !loadAuth());
+  const [notifications, setNotifications] = useState<AppNotification[]>(() => loadNotifications());
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => loadSavedAddresses());
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState(0);
+  const [paymentPurpose, setPaymentPurpose] = useState<"booking" | "topup">("booking");
+  const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<PaymentProvider>("payme");
+  const [scheduledDateTime, setScheduledDateTime] = useState("");
+  const paymentCallbackRef = useRef<((provider: PaymentProvider) => void) | null>(null);
+
+  const pushNotification = (partial: Omit<AppNotification, "id" | "read" | "createdAt">) => {
+    const n = createNotification(partial);
+    setNotifications((prev) => {
+      const next = [n, ...prev].slice(0, 50);
+      saveNotifications(next);
+      return next;
+    });
+  };
+
+  const unreadNotificationCount = notifications.filter((n) => !n.read).length;
+
+  const handleAuthVerified = (phone: string) => {
+    setAuthSession(loadAuth());
+    setShowAuthModal(false);
+    setUserProfile((prev) => ({ ...prev, phone }));
+    pushNotification({
+      type: "system",
+      title: { uz: "Xush kelibsiz!", en: "Welcome!", ru: "Добро пожаловать!" },
+      body: {
+        uz: `${phone} raqami tasdiqlandi. 404-GO xizmatlaridan foydalanishingiz mumkin.`,
+        en: `${phone} verified. You can use 404-GO services.`,
+        ru: `${phone} подтверждён. Можете пользоваться 404-GO.`,
+      },
+    });
+  };
+
+  const openPayment = (amount: number, purpose: "booking" | "topup", onSuccess: (provider: PaymentProvider) => void) => {
+    setPaymentAmount(amount);
+    setPaymentPurpose(purpose);
+    paymentCallbackRef.current = onSuccess;
+    setShowPaymentModal(true);
+  };
+
+  const handleSelectSavedAddress = (addr: SavedAddress, field: "from" | "to") => {
+    if (field === "from") {
+      setDirectFromText(addr.address);
+      if (addr.coords) setCustomFromCoords(addr.coords);
+    } else {
+      setDirectToText(addr.address);
+      if (addr.coords) setCustomToCoords(addr.coords);
+    }
+  };
+
+  const handleSaveCustomAddress = (address: string) => {
+    const newAddr: SavedAddress = {
+      id: `custom-${Date.now()}`,
+      label: { uz: "Sevimli", en: "Favorite", ru: "Избранное" },
+      address,
+      icon: "custom",
+    };
+    setSavedAddresses((prev) => {
+      const next = [...prev, newAddr];
+      saveSavedAddresses(next);
+      return next;
+    });
+  };
+
   const [couponSortOrder, setCouponSortOrder] = useState<"desc" | "asc" | "code">("desc");
   const [useCashbackAsPayment, setUseCashbackAsPayment] = useState(false);
 
@@ -320,9 +405,7 @@ export default function App() {
   const [showReportModal, setShowReportModal] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
-  // Voice Command simulation
-  const [isListening, setIsListening] = useState(false);
-  const [voiceTextPrompt, setVoiceTextPrompt] = useState("");
+  // Voice Command (Web Speech API + fallback)
   const [voiceTimer, setVoiceTimer] = useState<number | null>(null);
 
   // Active Live Booking popup (parsed from Gemini or custom trigger)
@@ -526,33 +609,27 @@ export default function App() {
     }
   };
 
-  // Simulate voice assistant
-  const startVoiceListening = () => {
-    setIsListening(true);
-    setVoiceTextPrompt("");
-
-    // Simulate speech recognition countdown
+  // Simulate voice assistant (fallback when Web Speech unavailable)
+  const startVoiceListeningLegacy = () => {
     const prompts = suggestions[lang];
     const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
-
     let charIdx = 0;
+    let acc = "";
     const interval = setInterval(() => {
-      setVoiceTextPrompt(prev => prev + randomPrompt.charAt(charIdx));
+      acc += randomPrompt.charAt(charIdx);
       charIdx++;
       if (charIdx >= randomPrompt.length) {
         clearInterval(interval);
         setTimeout(() => {
-          setIsListening(false);
-          // Auto send simulated voice message
           handleSendMessage(randomPrompt);
           setActiveTab("messages");
-        }, 1200);
+        }, 800);
       }
     }, 45);
   };
 
   // Confirm booking & create active order
-  const handleConfirmBooking = () => {
+  const finalizeBooking = (paymentProvider: PaymentProvider = "card") => {
     if (!pendingBooking) return;
 
     // Find the active linked card
@@ -697,6 +774,13 @@ export default function App() {
       return { uz: "Bajarilmoqda", en: "In progress", ru: "Выполняется" };
     };
 
+    const isScheduled = !!scheduledDateTime && new Date(scheduledDateTime) > new Date();
+    const scheduledStatus = {
+      uz: "Rejalashtirilgan",
+      en: "Scheduled",
+      ru: "Запланировано",
+    };
+
     const newOrder: Booking = {
       id: `order-${Date.now()}`,
       type: pendingBooking.type,
@@ -707,26 +791,35 @@ export default function App() {
         ru: pendingBooking.subtitle,
       },
       price: pendingBooking.price,
-      date: "Hozirgina",
-      status: "active",
-      statusText: statusForType(),
+      date: isScheduled
+        ? new Date(scheduledDateTime).toLocaleString(lang === "ru" ? "ru-RU" : lang === "en" ? "en-US" : "uz-UZ")
+        : "Hozirgina",
+      status: isScheduled ? "scheduled" : "active",
+      statusText: isScheduled ? scheduledStatus : statusForType(),
       from: pendingBooking.from,
       to: pendingBooking.to,
       fromCoords: pendingBooking.fromCoords ?? customFromCoords ?? undefined,
       toCoords: pendingBooking.toCoords ?? customToCoords ?? undefined,
-      ...(isTaxi
+      scheduledAt: isScheduled ? scheduledDateTime : undefined,
+      paymentProvider,
+      driverPhone: "+998901234567",
+      driverTrips: Math.floor(800 + Math.random() * 3200),
+      driverVerified: true,
+      ...(isTaxi && !isScheduled
         ? {
             ridePhase: "searching" as const,
             driverChat: [],
           }
-        : {
-            driverName: serviceDriverInfo.driverName,
-            carName: serviceDriverInfo.carName,
-            carNumber: serviceDriverInfo.carNumber,
-            rating: parseFloat((4.7 + Math.random() * 0.3).toFixed(2)),
-            duration: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "1 soat" : "18 daqiqa",
-            distance: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "—" : "12.4 km",
-          }),
+        : !isScheduled
+          ? {
+              driverName: serviceDriverInfo.driverName,
+              carName: serviceDriverInfo.carName,
+              carNumber: serviceDriverInfo.carNumber,
+              rating: parseFloat((4.7 + Math.random() * 0.3).toFixed(2)),
+              duration: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "1 soat" : "18 daqiqa",
+              distance: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "—" : "12.4 km",
+            }
+          : {}),
     };
 
     setOrders(prev => [newOrder, ...prev]);
@@ -734,23 +827,122 @@ export default function App() {
     setPendingBooking(null);
     setDirectBookingService(null);
     setPinMode(null);
+    setScheduledDateTime("");
+    setSelectedPaymentProvider(paymentProvider);
     setActiveTab("orders");
-    setOrderFilter("active");
-    setShowShowcaseInsideApp(!isTaxi);
+    setOrderFilter(isScheduled ? "scheduled" : "active");
+    setShowShowcaseInsideApp(!isTaxi && !isScheduled);
 
-    const welcomeMsg = isTaxi
+    pushNotification({
+      type: "order",
+      orderId: newOrder.id,
+      title: {
+        uz: isScheduled ? "Buyurtma rejalashtirildi" : "Buyurtma qabul qilindi",
+        en: isScheduled ? "Order scheduled" : "Order accepted",
+        ru: isScheduled ? "Заказ запланирован" : "Заказ принят",
+      },
+      body: {
+        uz: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} so'm`,
+        en: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} UZS`,
+        ru: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} сум`,
+      },
+    });
+
+    pushNotification({
+      type: "payment",
+      title: { uz: "To'lov o'tdi", en: "Payment successful", ru: "Оплата прошла" },
+      body: {
+        uz: `${paymentProvider.toUpperCase()} orqali ${pendingBooking.price.toLocaleString()} so'm yechildi`,
+        en: `${pendingBooking.price.toLocaleString()} UZS paid via ${paymentProvider}`,
+        ru: `Списано ${pendingBooking.price.toLocaleString()} сум через ${paymentProvider}`,
+      },
+    });
+
+    const welcomeMsg = isScheduled
       ? lang === "uz"
-        ? "Taksi buyurtmangiz yuborildi! Eng yaqin haydovchi qidirilmoqda."
+        ? `Buyurtma ${newOrder.date} ga rejalashtirildi!`
         : lang === "ru"
-          ? "Заказ такси отправлен! Ищем ближайшего водителя."
-          : "Taxi request sent! Searching for the nearest driver."
-      : lang === "uz"
-        ? "Buyurtmangiz qabul qilindi! Haydovchi tayinlandi va yo'lga chiqdi."
-        : lang === "ru"
-          ? "Ваш заказ успешно принят! Водитель назначен и уже в пути."
-          : "Your order is accepted! The driver is assigned and on their way.";
+          ? `Заказ запланирован на ${newOrder.date}!`
+          : `Order scheduled for ${newOrder.date}!`
+      : isTaxi
+        ? lang === "uz"
+          ? "Taksi buyurtmangiz yuborildi! Eng yaqin haydovchi qidirilmoqda."
+          : lang === "ru"
+            ? "Заказ такси отправлен! Ищем ближайшего водителя."
+            : "Taxi request sent! Searching for the nearest driver."
+        : lang === "uz"
+          ? "Buyurtmangiz qabul qilindi! Haydovchi tayinlandi va yo'lga chiqdi."
+          : lang === "ru"
+            ? "Ваш заказ успешно принят! Водитель назначен и уже в пути."
+            : "Your order is accepted! The driver is assigned and on their way.";
     speakText(welcomeMsg);
   };
+
+  const handleConfirmBooking = () => {
+    if (!pendingBooking) return;
+    if (!authSession) {
+      setShowAuthModal(true);
+      return;
+    }
+    openPayment(pendingBooking.price, "booking", (provider) => finalizeBooking(provider));
+  };
+
+  const { isListening, interimText: voiceTextPrompt, startListening, stopListening, supported: voiceSupported } = useVoiceOrder({
+    lang,
+    onResult: (text) => {
+      handleSendMessage(text);
+      setActiveTab("messages");
+    },
+    onError: (msg) => speakText(msg),
+  });
+
+  const startVoiceListening = () => {
+    if (voiceSupported) {
+      if (isListening) stopListening();
+      else startListening();
+    } else {
+      startVoiceListeningLegacy();
+    }
+  };
+
+  // Activate scheduled orders when time arrives
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      setOrders((prev) => {
+        const dueIds: string[] = [];
+        const next = prev.map((o) => {
+          if (o.status === "scheduled" && o.scheduledAt && new Date(o.scheduledAt).getTime() <= now) {
+            dueIds.push(o.id);
+            return {
+              ...o,
+              status: "active" as const,
+              date: "Hozirgina",
+              statusText: { uz: "Bajarilmoqda", en: "In progress", ru: "Выполняется" },
+              ...(o.type === "taxi" ? { ridePhase: "searching" as const, driverChat: [] } : {}),
+            };
+          }
+          return o;
+        });
+        if (dueIds.length > 0) {
+          dueIds.forEach((id) => {
+            const o = next.find((x) => x.id === id);
+            if (o) {
+              pushNotification({
+                type: "order",
+                orderId: id,
+                title: { uz: "Rejalashtirilgan buyurtma boshlandi", en: "Scheduled order started", ru: "Запланированный заказ начался" },
+                body: { uz: o.from || "404-GO", en: o.from || "404-GO", ru: o.from || "404-GO" },
+              });
+            }
+          });
+          return next;
+        }
+        return prev;
+      });
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleUpdateOrder = (orderId: string, updates: Partial<Booking>) => {
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o)));
@@ -801,14 +993,26 @@ export default function App() {
   const handleTopUp = () => {
     const amount = parseInt(topUpAmount);
     if (!isNaN(amount) && amount > 0) {
-      setBalance(prev => prev + amount);
       setShowTopUpModal(false);
-      const topUpMsg = lang === "uz"
-        ? `Hisobingiz muvaffaqiyatli to'ldirildi. Hozirgi balans: ${balance + amount} so'm.`
-        : lang === "ru"
-          ? `Баланс успешно пополнен. Текущий баланс: ${balance + amount} сумов.`
-          : `Account successfully topped up. Current balance: ${balance + amount} UZS.`;
-      speakText(topUpMsg);
+      openPayment(amount, "topup", () => {
+        setBalance((prev) => prev + amount);
+        setShowTopUpModal(false);
+        pushNotification({
+          type: "payment",
+          title: { uz: "Balans to'ldirildi", en: "Balance topped up", ru: "Баланс пополнен" },
+          body: {
+            uz: `+${amount.toLocaleString()} so'm qo'shildi`,
+            en: `+${amount.toLocaleString()} UZS added`,
+            ru: `+${amount.toLocaleString()} сум добавлено`,
+          },
+        });
+        const topUpMsg = lang === "uz"
+          ? `Hisobingiz muvaffaqiyatli to'ldirildi. Hozirgi balans: ${balance + amount} so'm.`
+          : lang === "ru"
+            ? `Баланс успешно пополнен. Текущий баланс: ${balance + amount} сумов.`
+            : `Account successfully topped up. Current balance: ${balance + amount} UZS.`;
+        speakText(topUpMsg);
+      });
     }
   };
 
@@ -1751,7 +1955,7 @@ export default function App() {
                     <button
                       onClick={() => {
                         if (voiceTimer) clearTimeout(voiceTimer);
-                        setIsListening(false);
+                        stopListening();
                       }}
                       className="mt-6 bg-slate-900 hover:bg-slate-850 text-gray-400 hover:text-white px-4 py-1.5 rounded-xl text-[11px] font-semibold border border-slate-800 transition"
                     >
@@ -1827,12 +2031,15 @@ export default function App() {
                     <div className="relative">
                       <button
                         type="button"
+                        onClick={() => setShowNotifications(true)}
                         className="p-2 nexgo-glass rounded-full text-gray-300 hover:border-teal-400/30 transition"
                         aria-label={lang === "uz" ? "Bildirishnomalar" : lang === "ru" ? "Уведомления" : "Notifications"}
                       >
                         <Bell className="w-3.5 h-3.5 text-teal-400" />
                       </button>
-                      <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                      {unreadNotificationCount > 0 && (
+                        <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1877,6 +2084,30 @@ export default function App() {
                             <p className="text-[9px] text-teal-400/90 leading-snug bg-teal-500/5 border border-teal-500/15 rounded-lg px-2 py-1.5">
                               {SERVICE_ROLE_HINTS[directBookingService][lang]}
                             </p>
+                          )}
+
+                          {!SINGLE_LOCATION_SERVICES.includes(directBookingService) && (
+                            <SavedAddressesBar
+                              lang={lang}
+                              addresses={savedAddresses}
+                              onSelect={handleSelectSavedAddress}
+                              onSaveCustom={handleSaveCustomAddress}
+                            />
+                          )}
+
+                          {!SINGLE_LOCATION_SERVICES.includes(directBookingService) && (
+                            <div>
+                              <label className="text-[9px] text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                {lang === "uz" ? "Rejalashtirish (ixtiyoriy)" : lang === "ru" ? "Запланировать (опц.)" : "Schedule (optional)"}
+                              </label>
+                              <input
+                                type="datetime-local"
+                                value={scheduledDateTime}
+                                onChange={(e) => setScheduledDateTime(e.target.value)}
+                                className="mt-1 w-full bg-slate-900 text-white text-[10px] p-2 rounded-lg border border-slate-800 focus:border-teal-400 outline-none"
+                              />
+                            </div>
                           )}
 
                           {directBookingService === "delivery" && (
@@ -2446,19 +2677,27 @@ export default function App() {
                             <span className="text-[10px] text-teal-400">{t.hammasini_korish_orders}</span>
                           </div>
 
-                      {/* Filters: Active vs Completed */}
-                      <div className="flex gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-850">
+                      {/* Filters: Active / Completed / Scheduled */}
+                      <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-850">
                         <button
                           onClick={() => setOrderFilter("active")}
-                          className={`flex-1 text-center py-1 rounded text-xs font-medium transition ${
+                          className={`flex-1 text-center py-1 rounded text-[10px] font-medium transition ${
                             orderFilter === "active" ? "bg-teal-400 text-slate-950" : "text-gray-400 hover:text-white"
                           }`}
                         >
                           {t.joriy}
                         </button>
                         <button
+                          onClick={() => setOrderFilter("scheduled")}
+                          className={`flex-1 text-center py-1 rounded text-[10px] font-medium transition ${
+                            orderFilter === "scheduled" ? "bg-teal-400 text-slate-950" : "text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          {t.rejalashtirilgan}
+                        </button>
+                        <button
                           onClick={() => setOrderFilter("completed")}
-                          className={`flex-1 text-center py-1 rounded text-xs font-medium transition ${
+                          className={`flex-1 text-center py-1 rounded text-[10px] font-medium transition ${
                             orderFilter === "completed" ? "bg-teal-400 text-slate-950" : "text-gray-400 hover:text-white"
                           }`}
                         >
@@ -2502,7 +2741,13 @@ export default function App() {
                       {/* Orders list */}
                       <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
                         {orders
-                          .filter((o) => (orderFilter === "active" ? o.status === "active" : o.status === "completed"))
+                          .filter((o) =>
+                            orderFilter === "active"
+                              ? o.status === "active"
+                              : orderFilter === "scheduled"
+                                ? o.status === "scheduled"
+                                : o.status === "completed"
+                          )
                           .map((o) => (
                             <div
                               key={o.id}
@@ -2557,7 +2802,11 @@ export default function App() {
                                     )
                                   )}
                                   <span className={`text-[8px] px-1.5 py-0.5 rounded-full inline-block ${
-                                    o.status === "active" ? "bg-amber-400/10 text-amber-400" : "bg-emerald-400/10 text-emerald-400"
+                                    o.status === "active"
+                                      ? "bg-amber-400/10 text-amber-400"
+                                      : o.status === "scheduled"
+                                        ? "bg-violet-400/10 text-violet-400"
+                                        : "bg-emerald-400/10 text-emerald-400"
                                   }`}>
                                     {o.statusText[lang]}
                                   </span>
@@ -2565,7 +2814,13 @@ export default function App() {
                               </div>
                             </div>
                           ))}
-                        {orders.filter((o) => (orderFilter === "active" ? o.status === "active" : o.status === "completed")).length === 0 && (
+                        {orders.filter((o) =>
+                          orderFilter === "active"
+                            ? o.status === "active"
+                            : orderFilter === "scheduled"
+                              ? o.status === "scheduled"
+                              : o.status === "completed"
+                        ).length === 0 && (
                           <p className="text-[10px] text-gray-500 text-center py-4">{t.no_active_order}</p>
                         )}
                       </div>
@@ -2624,6 +2879,12 @@ export default function App() {
                             </>
                           ) : (
                             <>
+                          {selectedOrder.status === "active" && (
+                            <>
+                              <DriverProfileCard lang={lang} order={selectedOrder} />
+                              <SosShareBar lang={lang} order={selectedOrder} userPhone={userProfile.phone} />
+                            </>
+                          )}
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center">
@@ -2780,7 +3041,8 @@ export default function App() {
 
                               <div className="flex gap-2 pt-1">
                                 <button
-                                  onClick={() => alert(lang === "uz" ? "Haydovchiga qo'ng'iroq qilinmoqda..." : "Calling driver...")}
+                                  type="button"
+                                  onClick={() => callDriver(selectedOrder.driverPhone || "+998901112233")}
                                   className="flex-1 bg-slate-900 hover:bg-slate-850 text-white text-[10px] font-medium py-1.5 rounded-lg border border-slate-800 transition flex items-center justify-center gap-1"
                                 >
                                   <Phone className="w-3 h-3 text-teal-400" />
@@ -3406,6 +3668,38 @@ export default function App() {
                           <User className="w-3.5 h-3.5 text-teal-400" />
                           {t.profile_title}
                         </h4>
+
+                        {authSession ? (
+                          <div className="flex items-center justify-between bg-teal-500/10 border border-teal-500/20 rounded-lg px-2.5 py-2">
+                            <div>
+                              <p className="text-[9px] text-teal-400 font-bold">
+                                {lang === "uz" ? "SMS orqali kirilgan" : lang === "ru" ? "Вход по SMS" : "SMS verified"}
+                              </p>
+                              <p className="text-[10px] text-white font-mono">{authSession.phone}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { clearAuth(); setAuthSession(null); setShowAuthModal(true); }}
+                              className="text-[9px] text-red-400 hover:text-red-300 px-2 py-1 border border-red-900/40 rounded-lg"
+                            >
+                              {lang === "uz" ? "Chiqish" : lang === "ru" ? "Выйти" : "Logout"}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setShowAuthModal(true)}
+                            className="w-full py-2 bg-teal-400/15 border border-teal-400/30 text-teal-300 text-[10px] font-bold rounded-lg"
+                          >
+                            {lang === "uz" ? "SMS orqali kirish" : lang === "ru" ? "Войти по SMS" : "Sign in with SMS"}
+                          </button>
+                        )}
+
+                        <SavedAddressesBar
+                          lang={lang}
+                          addresses={savedAddresses}
+                          onSelect={(addr) => updateProfileField("address", addr.address)}
+                        />
 
                         {/* Photo upload */}
                         <div className="flex flex-col items-center gap-2 py-1">
@@ -4124,7 +4418,9 @@ export default function App() {
               </button>
 
               <span className="text-[10px] text-gray-500 mt-2 text-center select-none font-mono">
-                Click mic to simulate speech command
+                {voiceSupported
+                  ? (lang === "uz" ? "Mikrofon — ovoz bilan buyurtma" : lang === "ru" ? "Микрофон — голосовой заказ" : "Mic — voice order")
+                  : (lang === "uz" ? "Demo ovoz simulyatsiyasi" : "Demo voice simulation")}
               </span>
             </div>
           </div>
@@ -4677,6 +4973,51 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {showAuthModal && (
+        <AuthModal
+          lang={lang}
+          required={!authSession}
+          onVerified={handleAuthVerified}
+          onClose={authSession ? () => setShowAuthModal(false) : undefined}
+        />
+      )}
+
+      <NotificationPanel
+        lang={lang}
+        notifications={notifications}
+        open={showNotifications}
+        onClose={() => setShowNotifications(false)}
+        onMarkRead={(id) => {
+          setNotifications((prev) => {
+            const next = prev.map((n) => (n.id === id ? { ...n, read: true } : n));
+            saveNotifications(next);
+            return next;
+          });
+        }}
+        onMarkAllRead={() => {
+          setNotifications((prev) => {
+            const next = prev.map((n) => ({ ...n, read: true }));
+            saveNotifications(next);
+            return next;
+          });
+        }}
+        onClear={() => {
+          setNotifications([]);
+          saveNotifications([]);
+        }}
+      />
+
+      <PaymentProviderModal
+        lang={lang}
+        amount={paymentAmount}
+        open={showPaymentModal}
+        onClose={() => setShowPaymentModal(false)}
+        onSuccess={(provider) => {
+          paymentCallbackRef.current?.(provider);
+          paymentCallbackRef.current = null;
+        }}
+      />
 
     </div>
   );
