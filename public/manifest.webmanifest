@@ -1,0 +1,19 @@
+{
+  "name": "404-GO",
+  "short_name": "404-GO",
+  "description": "AI Super Mobility — taksi, yetkazib berish, yuk tashish va boshqa xizmatlar",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050810",
+  "theme_color": "#050810",
+  "lang": "uz",
+  "icons": [
+    {
+      "src": "/logo-404-go.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

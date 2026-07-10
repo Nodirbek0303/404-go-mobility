@@ -1,0 +1,6 @@
+{
+  "name": "404-GO AI Super Mobility Platform",
+  "description": "Taksi, yetkazib berish, yuk tashish, smart parking va EV zaryadlash xizmatlari bir joyda.",
+  "requestFramePermissions": ["microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
