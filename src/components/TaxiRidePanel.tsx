@@ -328,6 +328,7 @@ export default function TaxiRidePanel({
         </p>
         <div className="h-32 rounded-xl overflow-hidden border border-teal-500/20 shadow-inner shadow-teal-500/5">
           <SmartMap
+            compact={false}
             activeFrom={order.from ?? "Chorsu"}
             activeTo={order.to ?? "Magic City"}
             driverName={driverFullName}

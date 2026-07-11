@@ -170,8 +170,9 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
               </a>
             </div>
 
-            <div className="h-40 rounded-xl overflow-hidden border border-slate-800">
+            <div className="h-40 rounded-xl overflow-hidden border border-slate-800 isolate z-0">
               <SmartMap
+                compact={false}
                 activeFrom={order?.from || "Toshkent"}
                 activeTo={order?.to || ""}
                 driverName={`${driver.firstName}`}

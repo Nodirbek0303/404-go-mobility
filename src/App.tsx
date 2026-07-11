@@ -948,33 +948,33 @@ export default function App() {
     speakText(welcomeMsg);
   };
 
-  const handleConfirmBooking = async () => {
+  const handleConfirmBooking = () => {
     if (!pendingBooking) return;
     if (!authSession) {
       setShowAuthModal(true);
       return;
     }
 
-    let serverOrderId: string | null = null;
-    try {
-      const backendOrder = await createPlatformOrder({
-        type: pendingBooking.type,
-        customerPhone: userProfile.phone || authSession.phone,
-        customerName: [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") || undefined,
-        from: pendingBooking.from || "",
-        to: pendingBooking.to,
-        fromCoords: customFromCoords ?? pendingBooking.fromCoords ?? undefined,
-        toCoords: customToCoords ?? pendingBooking.toCoords ?? undefined,
-        price: pendingBooking.price,
-      });
-      serverOrderId = backendOrder.id;
-      pendingServerOrderRef.current = backendOrder.id;
-      setPendingServerOrderId(backendOrder.id);
-    } catch {
-      pendingServerOrderRef.current = null;
-    }
-
+    // To'lov oynasini darhol ochish — backend kutmasdan
     openPayment(pendingBooking.price, "booking", (provider) => finalizeBooking(provider));
+
+    createPlatformOrder({
+      type: pendingBooking.type,
+      customerPhone: userProfile.phone || authSession.phone,
+      customerName: [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") || undefined,
+      from: pendingBooking.from || "",
+      to: pendingBooking.to,
+      fromCoords: customFromCoords ?? pendingBooking.fromCoords ?? undefined,
+      toCoords: customToCoords ?? pendingBooking.toCoords ?? undefined,
+      price: pendingBooking.price,
+    })
+      .then((backendOrder) => {
+        pendingServerOrderRef.current = backendOrder.id;
+        setPendingServerOrderId(backendOrder.id);
+      })
+      .catch(() => {
+        pendingServerOrderRef.current = null;
+      });
   };
 
   const { isListening, interimText: voiceTextPrompt, startListening, stopListening, supported: voiceSupported } = useVoiceOrder({
@@ -2448,8 +2448,9 @@ export default function App() {
                           )}
 
                           {/* Tashkent Interactive Map embedded in Mobile view! */}
-                          <div className="h-28 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner mt-1">
+                          <div className="h-28 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner mt-1 isolate z-0">
                             <SmartMap
+                              compact
                               pinMode={pinMode}
                               serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
                               selectedServicePointId={
@@ -4262,7 +4263,7 @@ export default function App() {
                   initial={{ opacity: 0, y: 100 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 100 }}
-                  className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-4 right-4 bg-slate-950 p-4 rounded-2xl border-2 border-teal-400 shadow-2xl z-50 space-y-3 max-w-lg mx-auto"
+                  className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-4 right-4 bg-slate-950 p-4 rounded-2xl border-2 border-teal-400 shadow-2xl z-[120] space-y-3 max-w-lg mx-auto"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-mono text-teal-400 bg-teal-400/10 px-2 py-0.5 rounded-full uppercase tracking-wider">
@@ -4508,8 +4509,9 @@ export default function App() {
             </div>
             
             {/* Embedded Live Map */}
-            <div className="w-full h-[220px]">
+            <div className="w-full h-[220px] overflow-hidden isolate z-0 rounded-xl">
               <SmartMap
+                compact={false}
                 activeFrom={
                   viewingHistoricalTrip
                     ? (viewingHistoricalTrip.from || "Chorsu")
