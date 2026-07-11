@@ -8,6 +8,11 @@
   "functions": {
     "api/chat.ts": { "maxDuration": 60 },
     "api/check-key.ts": { "maxDuration": 30 },
-    "api/health.ts": { "maxDuration": 10 }
+    "api/health.ts": { "maxDuration": 10 },
+    "api/orders.ts": { "maxDuration": 30 },
+    "api/drivers.ts": { "maxDuration": 30 },
+    "api/payments.ts": { "maxDuration": 30 },
+    "api/geocode.ts": { "maxDuration": 20 },
+    "api/config.ts": { "maxDuration": 10 }
   }
 }

@@ -55,6 +55,9 @@ import { translations } from "./translations";
 import { serviceCategories, initialOrders, transitRoutes } from "./servicesData";
 import { Language, Booking, ChatMessage, TransitRoute, UserProfile, AppNotification, SavedAddress, PaymentProvider, AuthSession } from "./types";
 import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
+import SmartMap from "./components/maps/SmartMap";
+import DriverPortal from "./components/driver/DriverPortal";
+import { cancelPlatformOrder, createPlatformOrder } from "./services/platformApi";
 import UIUXShowcase from "./components/UIUXShowcase";
 import TaxiRidePanel from "./components/TaxiRidePanel";
 import AuthModal from "./components/customer/AuthModal";
@@ -226,10 +229,18 @@ export default function App() {
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>(() => loadSavedAddresses());
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState(0);
+  const [pendingServerOrderId, setPendingServerOrderId] = useState<string | null>(null);
+  const [showDriverPortal, setShowDriverPortal] = useState(false);
   const [paymentPurpose, setPaymentPurpose] = useState<"booking" | "topup">("booking");
   const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<PaymentProvider>("payme");
   const [scheduledDateTime, setScheduledDateTime] = useState("");
   const paymentCallbackRef = useRef<((provider: PaymentProvider) => void) | null>(null);
+  const pendingServerOrderRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") === "driver") setShowDriverPortal(true);
+  }, []);
 
   const pushNotification = (partial: Omit<AppNotification, "id" | "read" | "createdAt">) => {
     const n = createNotification(partial);
@@ -824,7 +835,8 @@ export default function App() {
     };
 
     const newOrder: Booking = {
-      id: `order-${Date.now()}`,
+      id: pendingServerOrderRef.current || pendingServerOrderId || `order-${Date.now()}`,
+      serverOrderId: pendingServerOrderRef.current || pendingServerOrderId || undefined,
       type: pendingBooking.type,
       title: getOrderTitle(pendingBooking.type),
       subtitle: {
@@ -879,6 +891,8 @@ export default function App() {
     setOrders(prev => [newOrder, ...prev]);
     setSelectedOrder(newOrder);
     setPendingBooking(null);
+    setPendingServerOrderId(null);
+    pendingServerOrderRef.current = null;
     setDirectBookingService(null);
     setPinMode(null);
     setScheduledDateTime("");
@@ -932,12 +946,32 @@ export default function App() {
     speakText(welcomeMsg);
   };
 
-  const handleConfirmBooking = () => {
+  const handleConfirmBooking = async () => {
     if (!pendingBooking) return;
     if (!authSession) {
       setShowAuthModal(true);
       return;
     }
+
+    let serverOrderId: string | null = null;
+    try {
+      const backendOrder = await createPlatformOrder({
+        type: pendingBooking.type,
+        customerPhone: userProfile.phone || authSession.phone,
+        customerName: [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") || undefined,
+        from: pendingBooking.from || "",
+        to: pendingBooking.to,
+        fromCoords: customFromCoords ?? pendingBooking.fromCoords ?? undefined,
+        toCoords: customToCoords ?? pendingBooking.toCoords ?? undefined,
+        price: pendingBooking.price,
+      });
+      serverOrderId = backendOrder.id;
+      pendingServerOrderRef.current = backendOrder.id;
+      setPendingServerOrderId(backendOrder.id);
+    } catch {
+      pendingServerOrderRef.current = null;
+    }
+
     openPayment(pendingBooking.price, "booking", (provider) => finalizeBooking(provider));
   };
 
@@ -1007,6 +1041,10 @@ export default function App() {
     const feeResult = calculateCancelFee(order);
 
     if (!window.confirm(cancelConfirmMessage(feeResult, lang))) return;
+
+    if (order.serverOrderId) {
+      cancelPlatformOrder(order.serverOrderId).catch(() => {});
+    }
 
     if (feeResult.fee > 0) {
       if (balance < feeResult.fee) {
@@ -2409,7 +2447,7 @@ export default function App() {
 
                           {/* Tashkent Interactive Map embedded in Mobile view! */}
                           <div className="h-28 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner mt-1">
-                            <MapComponent
+                            <SmartMap
                               pinMode={pinMode}
                               serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
                               selectedServicePointId={
@@ -3812,6 +3850,15 @@ export default function App() {
                           </button>
                         )}
 
+                        <button
+                          type="button"
+                          onClick={() => setShowDriverPortal(true)}
+                          className="w-full py-2 bg-slate-900 border border-slate-800 hover:border-teal-500/40 text-[10px] font-bold text-white rounded-lg flex items-center justify-center gap-2"
+                        >
+                          <Car className="w-3.5 h-3.5 text-teal-400" />
+                          {lang === "uz" ? "Haydovchi portali" : lang === "ru" ? "Портал водителя" : "Driver portal"}
+                        </button>
+
                         <SavedAddressesBar
                           lang={lang}
                           addresses={savedAddresses}
@@ -4460,7 +4507,7 @@ export default function App() {
             
             {/* Embedded Live Map */}
             <div className="w-full h-[220px]">
-              <MapComponent
+              <SmartMap
                 activeFrom={
                   viewingHistoricalTrip
                     ? (viewingHistoricalTrip.from || "Chorsu")
@@ -5128,6 +5175,7 @@ export default function App() {
       <PaymentProviderModal
         lang={lang}
         amount={paymentAmount}
+        orderId={pendingServerOrderId}
         open={showPaymentModal}
         onClose={() => setShowPaymentModal(false)}
         onSuccess={(provider) => {
@@ -5135,6 +5183,10 @@ export default function App() {
           paymentCallbackRef.current = null;
         }}
       />
+
+      {showDriverPortal && (
+        <DriverPortal lang={lang} onClose={() => setShowDriverPortal(false)} />
+      )}
 
     </div>
   );

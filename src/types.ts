@@ -64,6 +64,7 @@ export interface Booking {
   driverCoords?: { latitude: number; longitude: number };
   driverStartCoords?: { latitude: number; longitude: number };
   dispatchTotalKm?: number;
+  serverOrderId?: string;
 }
 export interface DriverChatMessage {
   id: string;

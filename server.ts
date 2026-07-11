@@ -83,6 +83,45 @@ export async function createApp(options: { apiOnly?: boolean } = {}) {
     throw lastError;
   }
 
+  const {
+    handlePlatformConfig,
+    handleGeocode,
+    handleOrdersList,
+    handleOrderCreate,
+    handleOrderGet,
+    handleOrderDispatch,
+    handleOrderCancel,
+    handleOrderPatch,
+    handleDriversList,
+    handleDriverGet,
+    handleDriverStatus,
+    handleDriverAccept,
+    handleDriverLocation,
+    handlePaymentCreate,
+    handlePaymentConfirm,
+    handlePaymentConfig,
+  } = await import("./lib/api/platformHandlers");
+
+  app.get("/api/config", handlePlatformConfig);
+  app.get("/api/geocode", handleGeocode);
+
+  app.get("/api/orders", handleOrdersList);
+  app.post("/api/orders", handleOrderCreate);
+  app.get("/api/orders/:id", handleOrderGet);
+  app.patch("/api/orders/:id", handleOrderPatch);
+  app.post("/api/orders/:id/dispatch", handleOrderDispatch);
+  app.post("/api/orders/:id/cancel", handleOrderCancel);
+
+  app.get("/api/drivers", handleDriversList);
+  app.get("/api/drivers/:id", handleDriverGet);
+  app.post("/api/drivers/:id/status", handleDriverStatus);
+  app.post("/api/drivers/:id/accept", handleDriverAccept);
+  app.post("/api/drivers/:id/location", handleDriverLocation);
+
+  app.get("/api/payments/config", handlePaymentConfig);
+  app.post("/api/payments/create", handlePaymentCreate);
+  app.post("/api/payments/confirm", handlePaymentConfirm);
+
   // API Endpoints
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", aiEnabled: !!ai });

@@ -1,11 +1,13 @@
-import React, { useState } from "react";
-import { CheckCircle2, CreditCard, Loader2, X } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { CheckCircle2, CreditCard, ExternalLink, Loader2, X } from "lucide-react";
 import { Language, PaymentProvider } from "../../types";
+import { confirmSandboxPlatformPayment, createPlatformPayment } from "../../services/platformApi";
 
 interface PaymentProviderModalProps {
   lang: Language;
   amount: number;
   open: boolean;
+  orderId?: string | null;
   onClose: () => void;
   onSuccess: (provider: PaymentProvider) => void;
 }
@@ -21,29 +23,89 @@ export default function PaymentProviderModal({
   lang,
   amount,
   open,
+  orderId,
   onClose,
   onSuccess,
 }: PaymentProviderModalProps) {
   const [selected, setSelected] = useState<PaymentProvider>("payme");
   const [processing, setProcessing] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sandboxPaymentId, setSandboxPaymentId] = useState<string | null>(null);
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [mode, setMode] = useState<"live" | "sandbox" | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setError(null);
+      setSandboxPaymentId(null);
+      setCheckoutUrl(null);
+      setMode(null);
+      setDone(false);
+    }
+  }, [open]);
 
   if (!open) return null;
 
   const title =
     lang === "uz" ? "To'lov usulini tanlang" : lang === "ru" ? "Выберите способ оплаты" : "Choose payment method";
 
-  const handlePay = () => {
-    setProcessing(true);
+  const finishSuccess = (provider: PaymentProvider) => {
+    setDone(true);
     window.setTimeout(() => {
+      onSuccess(provider);
+      setDone(false);
+      onClose();
+    }, 1200);
+  };
+
+  const handlePay = async () => {
+    setProcessing(true);
+    setError(null);
+
+    try {
+      if (orderId) {
+        const result = await createPlatformPayment(orderId, selected, amount);
+        setMode(result.mode);
+
+        if (result.status === "paid") {
+          finishSuccess(selected);
+          return;
+        }
+
+        if (result.checkoutUrl) {
+          setCheckoutUrl(result.checkoutUrl);
+          if (result.mode === "sandbox") {
+            setSandboxPaymentId(result.paymentId);
+          } else {
+            window.open(result.checkoutUrl, "_blank", "noopener,noreferrer");
+            finishSuccess(selected);
+          }
+          return;
+        }
+      }
+
+      // Top-up yoki backend yo'q — lokal tasdiq
+      await new Promise((r) => window.setTimeout(r, 1200));
+      finishSuccess(selected);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "To'lov xatosi");
+    } finally {
       setProcessing(false);
-      setDone(true);
-      window.setTimeout(() => {
-        onSuccess(selected);
-        setDone(false);
-        onClose();
-      }, 1200);
-    }, 1500);
+    }
+  };
+
+  const confirmSandbox = async () => {
+    if (!sandboxPaymentId) return;
+    setProcessing(true);
+    try {
+      await confirmSandboxPlatformPayment(sandboxPaymentId);
+      finishSuccess(selected);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sandbox tasdiqlash xatosi");
+    } finally {
+      setProcessing(false);
+    }
   };
 
   return (
@@ -53,6 +115,11 @@ export default function PaymentProviderModal({
           <div>
             <h3 className="font-bold text-white text-sm">{title}</h3>
             <p className="text-teal-400 font-mono text-lg font-bold mt-1">{amount.toLocaleString()} so'm</p>
+            {mode === "sandbox" && (
+              <p className="text-[9px] text-amber-400 mt-1">
+                {lang === "uz" ? "Sandbox rejim — .env da Payme/Click kalitlarini qo'shing" : "Sandbox mode"}
+              </p>
+            )}
           </div>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-white">
             <X className="w-4 h-4" />
@@ -65,6 +132,33 @@ export default function PaymentProviderModal({
             <p className="text-sm text-white font-bold">
               {lang === "uz" ? "To'lov muvaffaqiyatli!" : lang === "ru" ? "Оплата успешна!" : "Payment successful!"}
             </p>
+          </div>
+        ) : sandboxPaymentId ? (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-300">
+              {lang === "uz"
+                ? "Demo Payme/Click oynasi. Haqiqiy to'lov uchun merchant kalitlarini sozlang."
+                : "Demo payment. Configure merchant keys for live checkout."}
+            </p>
+            {checkoutUrl && (
+              <a
+                href={checkoutUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-xs text-teal-400 hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Checkout sahifasi
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={confirmSandbox}
+              disabled={processing}
+              className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 text-xs font-bold rounded-xl"
+            >
+              {lang === "uz" ? "Sandbox to'lovni tasdiqlash" : "Confirm sandbox payment"}
+            </button>
           </div>
         ) : (
           <>
@@ -85,6 +179,7 @@ export default function PaymentProviderModal({
                 </button>
               ))}
             </div>
+            {error && <p className="text-[10px] text-red-400">{error}</p>}
             <button
               type="button"
               onClick={handlePay}

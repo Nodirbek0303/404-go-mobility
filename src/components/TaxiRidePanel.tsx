@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Phone, MessageSquare, Send, MapPin, Navigation, Loader2, Car, User } from "lucide-react";
-import MapComponent from "./MapComponent";
+import SmartMap from "./maps/SmartMap";
 import { Booking, DriverChatMessage, Language, UserProfile } from "../types";
 import {
   googleMapsDirections,
@@ -15,37 +15,15 @@ import {
   haversineKm,
   interpolateCoords,
   kmStepForInterval,
-  nearestDriverDepot,
 } from "../utils/geoCalc";
+import {
+  dispatchPlatformOrder,
+  getPlatformOrder,
+  mapDriverToBooking,
+  orderStatusToRidePhase,
+} from "../services/platformApi";
 
 const DRIVER_TICK_MS = 2000;
-
-const MOCK_DRIVERS = [
-  {
-    firstName: "Rustam",
-    lastName: "Aliyev",
-    phone: "+998901234567",
-    carName: "Chevrolet Onix",
-    carNumber: "01 D 345 AB",
-    rating: 4.9,
-  },
-  {
-    firstName: "Sardor",
-    lastName: "Karimov",
-    phone: "+998907654321",
-    carName: "BYD Song Plus",
-    carNumber: "01 A 777 AA",
-    rating: 4.85,
-  },
-  {
-    firstName: "Dina",
-    lastName: "Ahmedova",
-    phone: "+998931112233",
-    carName: "Kia K5",
-    carNumber: "01 B 123 AB",
-    rating: 4.92,
-  },
-];
 
 type Translations = typeof import("../translations").translations.uz;
 
@@ -94,62 +72,71 @@ export default function TaxiRidePanel({
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [driverChat.length]);
 
-  // Simulate driver search → accept → arriving → in_ride
+  // Backend haydovchi tarmog'i — dispatch va sync
   useEffect(() => {
     if (order.status !== "active" || order.type !== "taxi") return;
     if (phase !== "searching" || simulationStartedFor.current === order.id) return;
+    if (!order.serverOrderId) return;
+
     simulationStartedFor.current = order.id;
 
-    const driver = MOCK_DRIVERS[Math.floor(Math.random() * MOCK_DRIVERS.length)];
-    const acceptMsg =
-      lang === "uz"
-        ? `Salom! Men ${driver.firstName} ${driver.lastName}. Buyurtmangizni qabul qildim, yo'lga chiqyapman.`
-        : lang === "ru"
-          ? `Здравствуйте! Я ${driver.firstName} ${driver.lastName}. Принял ваш заказ, выезжаю.`
-          : `Hi! I'm ${driver.firstName} ${driver.lastName}. I accepted your ride and I'm on my way.`;
+    dispatchPlatformOrder(order.serverOrderId)
+      .then(({ order: srvOrder, driver }) => {
+        const dispatchKm = srvOrder.driverStartCoords
+          ? haversineKm(srvOrder.driverStartCoords, { latitude: fromLat, longitude: fromLng })
+          : 0;
+        const acceptMsg =
+          lang === "uz"
+            ? `Salom! Men ${driver.firstName} ${driver.lastName}. Buyurtmangizni qabul qildim, yo'lga chiqyapman.`
+            : lang === "ru"
+              ? `Здравствуйте! Я ${driver.firstName} ${driver.lastName}. Принял ваш заказ, выезжаю.`
+              : `Hi! I'm ${driver.firstName} ${driver.lastName}. I accepted your ride and I'm on my way.`;
 
-    const t1 = window.setTimeout(() => {
-      const pickup = { latitude: fromLat, longitude: fromLng };
-      const { depot, distanceKm: dispatchKm } = nearestDriverDepot(pickup);
-      onUpdateOrder(order.id, {
-        ridePhase: "accepted",
-        driverStartCoords: depot,
-        driverCoords: depot,
-        dispatchTotalKm: dispatchKm,
-        driverDistanceKm: 0,
-        etaMinutes: etaMinutesFromKm(dispatchKm),
-        driverFirstName: driver.firstName,
-        driverLastName: driver.lastName,
-        driverName: `${driver.firstName} ${driver.lastName}`,
-        driverPhone: driver.phone,
-        carName: driver.carName,
-        carNumber: driver.carNumber,
-        rating: driver.rating,
-        driverChat: [
-          {
-            id: `drv-${Date.now()}`,
-            sender: "driver",
-            content: acceptMsg,
-            timestamp: nowTime(),
-          },
-        ],
+        onUpdateOrder(order.id, {
+          ridePhase: orderStatusToRidePhase(srvOrder.status),
+          driverStartCoords: srvOrder.driverStartCoords || driver.location,
+          driverCoords: srvOrder.driverCoords || driver.location,
+          dispatchTotalKm: dispatchKm,
+          driverDistanceKm: srvOrder.driverDistanceKm ?? 0,
+          etaMinutes: etaMinutesFromKm(dispatchKm),
+          ...mapDriverToBooking(driver),
+          driverChat: [
+            {
+              id: `drv-${Date.now()}`,
+              sender: "driver",
+              content: acceptMsg,
+              timestamp: nowTime(),
+            },
+          ],
+        });
+      })
+      .catch(() => {
+        simulationStartedFor.current = null;
       });
-    }, 2500);
+  }, [order.id, order.status, order.type, order.serverOrderId, phase, lang, onUpdateOrder, fromLat, fromLng]);
 
-    const t2 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "arriving" });
-    }, 5000);
-
-    const t3 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "in_ride", etaMinutes: 0 });
-    }, 14000);
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-    };
-  }, [order.id, order.status, order.type, phase, lang, onUpdateOrder]);
+  // Serverdan haydovchi GPS sync
+  useEffect(() => {
+    if (!order.serverOrderId || phase === "searching") return;
+    const interval = window.setInterval(async () => {
+      try {
+        const { order: srvOrder, driver } = await getPlatformOrder(order.serverOrderId!);
+        const updates: Partial<Booking> = {
+          ridePhase: orderStatusToRidePhase(srvOrder.status),
+          driverDistanceKm: srvOrder.driverDistanceKm,
+        };
+        if (srvOrder.driverCoords) updates.driverCoords = srvOrder.driverCoords;
+        if (driver) Object.assign(updates, mapDriverToBooking(driver));
+        if (srvOrder.status === "accepted" && phase === "accepted") {
+          updates.ridePhase = "arriving";
+        }
+        onUpdateOrder(order.id, updates);
+      } catch {
+        /* local GPS sim continues */
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [order.id, order.serverOrderId, phase, onUpdateOrder]);
 
   // ETA countdown while arriving
   useEffect(() => {
@@ -344,7 +331,7 @@ export default function TaxiRidePanel({
           {t.taxi_live_map}
         </p>
         <div className="h-32 rounded-xl overflow-hidden border border-teal-500/20 shadow-inner shadow-teal-500/5">
-          <MapComponent
+          <SmartMap
             activeFrom={order.from ?? "Chorsu"}
             activeTo={order.to ?? "Magic City"}
             driverName={driverFullName}
@@ -353,6 +340,7 @@ export default function TaxiRidePanel({
             lang={lang}
             customFromCoords={order.fromCoords ?? null}
             customToCoords={order.toCoords ?? null}
+            driverCoords={order.driverCoords ?? null}
           />
         </div>
         {phase === "arriving" && order.etaMinutes != null && order.etaMinutes > 0 && (
