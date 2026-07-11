@@ -72,18 +72,29 @@ export default function MapLibre({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Partial<Record<"from" | "to" | "driver" | "user", maplibregl.Marker>>>({});
   const onMapClickRef = useRef(onMapClick);
+  const onFailedRef = useRef(onFailed);
   const loadedRef = useRef(false);
+  const failedRef = useRef(false);
+  const lastViewKeyRef = useRef("");
   const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
 
   onMapClickRef.current = onMapClick;
+  onFailedRef.current = onFailed;
 
-  // Xaritani faqat bir marta yaratish — qayta yuklanish yo'q
+  // Xaritani faqat bir marta yaratish
   useEffect(() => {
     const container = containerRef.current;
     if (!container || mapRef.current) return;
 
     let destroyed = false;
     let loadTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const failOnce = () => {
+      if (destroyed || failedRef.current || loadedRef.current) return;
+      failedRef.current = true;
+      onFailedRef.current?.();
+    };
 
     const cleanup = () => {
       destroyed = true;
@@ -112,14 +123,15 @@ export default function MapLibre({
       loadTimeout = setTimeout(() => {
         if (!destroyed && !loadedRef.current) {
           console.warn("MapLibre load timeout");
-          onFailed?.();
+          failOnce();
         }
-      }, 12000);
+      }, 15000);
 
       map.on("error", (e) => {
+        // Faqat dastlabki yuklanishda fallback — keyin tile xatolari e'tiborsiz
         if (!destroyed && !loadedRef.current) {
           console.warn("MapLibre error:", e);
-          onFailed?.();
+          failOnce();
         }
       });
 
@@ -128,6 +140,7 @@ export default function MapLibre({
         loadedRef.current = true;
         if (loadTimeout) clearTimeout(loadTimeout);
         setLoading(false);
+        setReady(true);
       });
 
       map.on("click", (e) => {
@@ -135,76 +148,82 @@ export default function MapLibre({
       });
     } catch (e) {
       console.warn("MapLibre init failed:", e);
-      onFailed?.();
+      failOnce();
     }
 
     return cleanup;
-  }, [onFailed]);
+  }, []);
 
-  const setMarker = (
-    key: "from" | "to" | "driver" | "user",
-    coords: { latitude: number; longitude: number } | null | undefined,
-    color: string,
-    label: string
-  ) => {
+  const syncMarkers = () => {
     const map = mapRef.current;
     if (!map || !loadedRef.current) return;
 
-    if (!coords) {
-      markersRef.current[key]?.remove();
-      delete markersRef.current[key];
-      return;
-    }
+    const upsert = (
+      key: "from" | "to" | "driver" | "user",
+      coords: { latitude: number; longitude: number } | null | undefined,
+      color: string,
+      label: string
+    ) => {
+      if (!coords) {
+        markersRef.current[key]?.remove();
+        delete markersRef.current[key];
+        return;
+      }
+      const lngLat: [number, number] = [coords.longitude, coords.latitude];
+      const existing = markersRef.current[key];
+      if (existing) {
+        existing.setLngLat(lngLat);
+        return;
+      }
+      markersRef.current[key] = new maplibregl.Marker({ element: makeDot(color, label) })
+        .setLngLat(lngLat)
+        .addTo(map);
+    };
 
-    const lngLat: [number, number] = [coords.longitude, coords.latitude];
-    const existing = markersRef.current[key];
-    if (existing) {
-      existing.setLngLat(lngLat);
-      return;
-    }
-
-    markersRef.current[key] = new maplibregl.Marker({ element: makeDot(color, label) })
-      .setLngLat(lngLat)
-      .addTo(map);
+    upsert("from", customFromCoords, "#2dd4bf", activeFrom);
+    upsert("to", customToCoords, "#f59e0b", activeTo);
+    upsert("driver", driverCoords, "#38bdf8", driverName);
+    upsert("user", liveUserCoords, "#3b82f6", lang === "uz" ? "Siz" : "You");
   };
 
-  // Markerlar yangilanishi — xarita qayta yaratilmaydi
+  // Markerlar — xarita qayta yaratilmaydi
   useEffect(() => {
-    if (!loadedRef.current) return;
-
-    setMarker("from", customFromCoords, "#2dd4bf", activeFrom);
-    setMarker("to", customToCoords, "#f59e0b", activeTo);
-    setMarker("driver", driverCoords, "#38bdf8", driverName);
-    setMarker("user", liveUserCoords, "#3b82f6", lang === "uz" ? "Siz" : "You");
+    if (!ready) return;
+    syncMarkers();
 
     const map = mapRef.current;
     if (!map) return;
+
+    const viewKey = [
+      customFromCoords?.latitude,
+      customFromCoords?.longitude,
+      customToCoords?.latitude,
+      customToCoords?.longitude,
+    ].join("|");
+
+    if (viewKey === lastViewKeyRef.current) return;
+    lastViewKeyRef.current = viewKey;
 
     if (customFromCoords && customToCoords) {
       const bounds = new maplibregl.LngLatBounds();
       bounds.extend([customFromCoords.longitude, customFromCoords.latitude]);
       bounds.extend([customToCoords.longitude, customToCoords.latitude]);
-      map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 600 });
+      map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 500 });
     } else if (customFromCoords) {
-      map.flyTo({
+      map.easeTo({
         center: [customFromCoords.longitude, customFromCoords.latitude],
         zoom: 14,
-        duration: 600,
+        duration: 500,
       });
     } else if (customToCoords) {
-      map.flyTo({
+      map.easeTo({
         center: [customToCoords.longitude, customToCoords.latitude],
         zoom: 14,
-        duration: 600,
-      });
-    } else if (liveUserCoords) {
-      map.flyTo({
-        center: [liveUserCoords.longitude, liveUserCoords.latitude],
-        zoom: 13,
-        duration: 600,
+        duration: 500,
       });
     }
   }, [
+    ready,
     customFromCoords?.latitude,
     customFromCoords?.longitude,
     customToCoords?.latitude,
@@ -217,17 +236,20 @@ export default function MapLibre({
     activeTo,
     driverName,
     lang,
-    loading,
   ]);
 
-  // Yo'l chizig'i — source yangilanadi, xarita emas
+  // Yo'l chizig'i
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !loadedRef.current) return;
+    if (!map || !ready) return;
 
     const removeRoute = () => {
-      if (map.getLayer("route-line")) map.removeLayer("route-line");
-      if (map.getSource("route")) map.removeSource("route");
+      try {
+        if (map.getLayer("route-line")) map.removeLayer("route-line");
+        if (map.getSource("route")) map.removeSource("route");
+      } catch {
+        /* ignore */
+      }
     };
 
     if (!showRoute || !customFromCoords || !customToCoords) {
@@ -236,31 +258,27 @@ export default function MapLibre({
     }
 
     let cancelled = false;
+    const from = customFromCoords;
+    const to = customToCoords;
 
-    const drawRoute = async () => {
-      const from = customFromCoords;
-      const to = customToCoords;
+    void (async () => {
       let geometry: [number, number][] = [
         [from.longitude, from.latitude],
         [to.longitude, to.latitude],
       ];
-
       try {
         const route = await fetchOsrmRoute(from.latitude, from.longitude, to.latitude, to.longitude);
         if (!cancelled) geometry = route.geometry;
       } catch {
-        /* straight line fallback */
+        /* straight line */
       }
-
       if (cancelled || !mapRef.current) return;
       const m = mapRef.current;
-
       const data: GeoJSON.Feature = {
         type: "Feature",
         properties: {},
         geometry: { type: "LineString", coordinates: geometry },
       };
-
       const source = m.getSource("route") as maplibregl.GeoJSONSource | undefined;
       if (source) {
         source.setData(data);
@@ -273,24 +291,23 @@ export default function MapLibre({
           paint: { "line-color": "#2dd4bf", "line-width": 4, "line-opacity": 0.85 },
         });
       }
-    };
+    })();
 
-    void drawRoute();
     return () => {
       cancelled = true;
     };
   }, [
+    ready,
     showRoute,
     customFromCoords?.latitude,
     customFromCoords?.longitude,
     customToCoords?.latitude,
     customToCoords?.longitude,
-    loading,
   ]);
 
   return (
     <div className={`maplibre-root relative w-full h-full min-h-[5rem] bg-slate-900 overflow-hidden isolate ${className}`}>
-      <div ref={containerRef} className="absolute inset-0 w-full h-full" style={{ contain: "strict" }} />
+      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900/90 z-[1] pointer-events-none">
           <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />

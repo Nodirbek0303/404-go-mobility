@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Car, 
   Package, 
@@ -598,6 +598,12 @@ export default function App() {
   const [gpsPickupActive, setGpsPickupActive] = useState(false);
   const [mapPickStep, setMapPickStep] = useState<"pickup" | "dropoff" | "ready">("pickup");
   const [pinMode, setPinMode] = useState<"from" | "to" | null>(null);
+  const mapPickStepRef = useRef(mapPickStep);
+  const pinModeRef = useRef(pinMode);
+  const directBookingServiceRef = useRef(directBookingService);
+  mapPickStepRef.current = mapPickStep;
+  pinModeRef.current = pinMode;
+  directBookingServiceRef.current = directBookingService;
   const [selectedCargoTruck, setSelectedCargoTruck] = useState(CARGO_TRUCKS[0].id);
   const [selectedDeliveryVehicle, setSelectedDeliveryVehicle] = useState(DELIVERY_VEHICLES[1].id);
   const [selectedParcelType, setSelectedParcelType] = useState(PARCEL_TYPES[0].id);
@@ -666,11 +672,14 @@ export default function App() {
     }
   }, [directBookingService]);
 
-  const handleMapClick = (lat: number, lng: number, _name: string) => {
+  const handleMapClick = useCallback((lat: number, lng: number, _name: string) => {
     const label = formatMapPointLabel(lat, lng, lang);
+    const service = directBookingServiceRef.current;
+    const step = mapPickStepRef.current;
+    const mode = pinModeRef.current;
 
-    if (directBookingService === "taxi") {
-      if (mapPickStep === "pickup" || pinMode === "from") {
+    if (service === "taxi") {
+      if (step === "pickup" || mode === "from") {
         setCustomFromCoords({ latitude: lat, longitude: lng });
         setDirectFromText(formatMapPointLabel(lat, lng, lang, "A"));
         setGpsPickupActive(false);
@@ -685,7 +694,7 @@ export default function App() {
         );
         return;
       }
-      if (mapPickStep === "dropoff" || pinMode === "to") {
+      if (step === "dropoff" || mode === "to") {
         setCustomToCoords({ latitude: lat, longitude: lng });
         setDirectToText(formatMapPointLabel(lat, lng, lang, "B"));
         setMapPickStep("ready");
@@ -702,17 +711,17 @@ export default function App() {
       return;
     }
 
-    if (pinMode === "from") {
+    if (mode === "from") {
       setDirectFromText(label);
       setCustomFromCoords({ latitude: lat, longitude: lng });
       setGpsPickupActive(false);
       setPinMode(null);
-    } else if (pinMode === "to") {
+    } else if (mode === "to") {
       setDirectToText(label);
       setCustomToCoords({ latitude: lat, longitude: lng });
       setPinMode(null);
     }
-  };
+  }, [lang]);
 
   const resolveAddressField = async (field: "from" | "to") => {
     const text = field === "from" ? directFromText.trim() : directToText.trim();
@@ -2852,12 +2861,12 @@ export default function App() {
                                 </p>
                               </div>
 
-                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair touch-none">
+                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
                                 <SmartMap
-                                  compact={false}
+                                  interactive
                                   pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
                                   liveUserCoords={liveCoords}
-                                  liveTracking={liveTracking}
+                                  liveTracking={liveTracking && gpsPickupActive}
                                   activeFrom={directFromText || (lang === "uz" ? "A — taksi keladi" : "A — pickup")}
                                   activeTo={directToText || (lang === "uz" ? "B — borish joyi" : "B — destination")}
                                   serviceMode="taxi"
@@ -2946,7 +2955,7 @@ export default function App() {
                                 }}
                                 onBlur={() => void resolveAddressField("from")}
                                 className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
-                                placeholder={lang === "uz" ? "Masalan: Chorsu bozori" : lang === "ru" ? "Например: Базар Чорсу" : "e.g., Chorsu Bazaar"}
+                                placeholder={lang === "uz" ? "Masalan: Amir Temur xiyoboni" : lang === "ru" ? "Например: Сквер Амира Темура" : "e.g., Amir Temur Square"}
                               />
                               {customFromCoords && (
                                 <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
@@ -2984,7 +2993,7 @@ export default function App() {
                                   }}
                                   onBlur={() => void resolveAddressField("to")}
                                   className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
-                                  placeholder={lang === "uz" ? "Masalan: Magic City bog'i" : lang === "ru" ? "Например: Парк Magic City" : "e.g., Magic City Park"}
+                                  placeholder={lang === "uz" ? "Masalan: Tashkent City" : lang === "ru" ? "Например: Tashkent City" : "e.g., Tashkent City"}
                                 />
                                 {customToCoords && (
                                   <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
@@ -4939,8 +4948,25 @@ export default function App() {
               <span className="text-[10px] text-gray-400 font-mono">Live Tracker</span>
             </div>
             
-            {/* Embedded Live Map */}
+            {/* Embedded Live Map — taksi tanlash paytida ikkinchi xarita yo'q */}
             <div className="w-full h-[220px] overflow-hidden isolate z-0 rounded-xl">
+              {directBookingService === "taxi" ? (
+                <div className="h-full flex flex-col items-center justify-center bg-slate-950 border border-slate-800 rounded-xl px-4 text-center gap-2">
+                  <MapPin className="w-8 h-8 text-teal-400/60" />
+                  <p className="text-[11px] text-gray-300 font-medium">
+                    {lang === "uz"
+                      ? "A va B nuqtalarni yuqoridagi taksi xaritasida belgilang"
+                      : lang === "ru"
+                        ? "Отметьте точки A и B на карте заказа такси выше"
+                        : "Mark points A and B on the taxi map above"}
+                  </p>
+                  {customFromCoords && customToCoords && (
+                    <p className="text-[10px] text-teal-400 font-mono">
+                      {getCalculatedPrice().toLocaleString()} so'm
+                    </p>
+                  )}
+                </div>
+              ) : (
               <SmartMap
                 compact={false}
                 liveUserCoords={liveCoords}
@@ -4974,7 +5000,9 @@ export default function App() {
                     : (selectedOrder?.status === "active" ? t.active_order_banner : "404-GO Active Platform")
                 }
                 showRoute={
-                  !!viewingHistoricalTrip || !!directBookingService || (!!selectedOrder && selectedOrder.status === "active")
+                  !!viewingHistoricalTrip ||
+                  (!!directBookingService && !!customFromCoords && !!customToCoords) ||
+                  (!!selectedOrder && selectedOrder.status === "active")
                 }
                 lang={lang}
                 pinMode={viewingHistoricalTrip ? null : pinMode}
@@ -4990,6 +5018,7 @@ export default function App() {
                 }
                 onMapClick={handleMapClick}
               />
+              )}
             </div>
           </div>
 

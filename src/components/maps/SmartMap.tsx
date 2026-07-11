@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import MapComponent from "../MapComponent";
 import MapLibre from "./MapLibre";
 
@@ -7,10 +7,23 @@ type MapProps = React.ComponentProps<typeof MapComponent> & {
   liveUserCoords?: { latitude: number; longitude: number } | null;
   etaMinutes?: number | null;
   compact?: boolean;
+  /** Taksi tanlash kabi interaktiv oqimlarda barqaror canvas xarita */
+  interactive?: boolean;
 };
 
-export default function SmartMap({ compact = true, liveUserCoords, etaMinutes, driverCoords, ...props }: MapProps) {
+export default function SmartMap({
+  compact = true,
+  interactive = false,
+  liveUserCoords,
+  etaMinutes,
+  driverCoords,
+  ...props
+}: MapProps) {
   const [useFallback, setUseFallback] = useState(false);
+
+  const handleFailed = useCallback(() => {
+    setUseFallback(true);
+  }, []);
 
   const shared = {
     ...props,
@@ -20,7 +33,8 @@ export default function SmartMap({ compact = true, liveUserCoords, etaMinutes, d
     liveTracking: props.liveTracking ?? !!liveUserCoords,
   };
 
-  if (compact || useFallback) {
+  // Interaktiv tanlash — tarmoq xatosiz barqaror canvas
+  if (interactive || compact || useFallback) {
     return <MapComponent {...shared} />;
   }
 
@@ -36,7 +50,8 @@ export default function SmartMap({ compact = true, liveUserCoords, etaMinutes, d
       driverCoords={driverCoords}
       liveUserCoords={liveUserCoords}
       etaMinutes={etaMinutes}
-      onFailed={() => setUseFallback(true)}
+      lang={props.lang}
+      onFailed={handleFailed}
     />
   );
 }
