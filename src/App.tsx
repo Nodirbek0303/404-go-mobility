@@ -72,7 +72,7 @@ import PaymentProviderModal from "./components/customer/PaymentProviderModal";
 import TaxiClassSelector from "./components/customer/TaxiClassSelector";
 import OrderConfirmPanel from "./components/customer/OrderConfirmPanel";
 import Why404Panel from "./components/customer/Why404Panel";
-import AdminPortal from "./components/admin/AdminPortal";
+import SupportContactPanel from "./components/customer/SupportContactPanel";
 import { getTaxiClass, type TaxiClassId } from "./taxiClasses";
 import SosShareBar, { callDriver } from "./components/customer/SosShareBar";
 import DriverProfileCard from "./components/customer/DriverProfileCard";
@@ -373,7 +373,6 @@ export default function App() {
   const [paymentAmount, setPaymentAmount] = useState(0);
   const [pendingServerOrderId, setPendingServerOrderId] = useState<string | null>(null);
   const [showDriverPortal, setShowDriverPortal] = useState(false);
-  const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [selectedTaxiClass, setSelectedTaxiClass] = useState<TaxiClassId>("economy");
   const [showTaxiConfirm, setShowTaxiConfirm] = useState(false);
   const [paymentPurpose, setPaymentPurpose] = useState<"booking" | "topup">("booking");
@@ -390,7 +389,6 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const mode = params.get("mode");
     if (mode === "driver") setShowDriverPortal(true);
-    if (mode === "admin") setShowAdminPortal(true);
     initFirebaseMessaging().catch(() => {});
   }, []);
 
@@ -3439,6 +3437,7 @@ export default function App() {
                           </div>
 
                           <Why404Panel lang={lang} />
+                          <SupportContactPanel lang={lang} />
                         </>
                       )}
                     </motion.div>
@@ -4440,15 +4439,6 @@ export default function App() {
                           {lang === "uz" ? "Haydovchi portali" : lang === "ru" ? "Портал водителя" : "Driver portal"}
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => setShowAdminPortal(true)}
-                          className="w-full py-2 bg-blue-600/15 border border-blue-500/30 hover:border-blue-400 text-[10px] font-bold text-blue-200 rounded-lg flex items-center justify-center gap-2"
-                        >
-                          <Sliders className="w-3.5 h-3.5 text-blue-400" />
-                          {lang === "uz" ? "Admin panel" : lang === "ru" ? "Админ-панель" : "Admin panel"}
-                        </button>
-
                         <SavedAddressesBar
                           lang={lang}
                           addresses={savedAddresses}
@@ -4593,6 +4583,8 @@ export default function App() {
                           {t.profile_save}
                         </button>
                       </form>
+
+                      <SupportContactPanel lang={lang} />
 
                       {/* Stats Card */}
                       <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 space-y-2">
@@ -5329,9 +5321,17 @@ export default function App() {
 
           {/* Copyright & QR code row */}
           <div className="flex flex-col md:flex-row items-center justify-between border-t border-slate-900 pt-6 gap-4 text-xs text-gray-500">
-            <p className="font-medium text-gray-400">
-              404-GO &copy; 2026. {t.harakatda_aqllilik}
-            </p>
+            <div className="space-y-1 text-center md:text-left">
+              <p className="font-medium text-gray-400">
+                404-GO &copy; 2026. {t.harakatda_aqllilik}
+              </p>
+              <p className="text-[10px] text-gray-500">
+                {lang === "uz" ? "Yordam:" : lang === "ru" ? "Поддержка:" : "Support:"}{" "}
+                <a href="tel:+998955997703" className="text-teal-400 hover:underline">+998 95 599 77 03</a>
+                {" · "}
+                <a href="https://t.me/evanshar03" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">@evanshar03</a>
+              </p>
+            </div>
             <div className="flex items-center gap-2 bg-slate-900/60 px-4 py-2 rounded-xl border border-slate-900">
               <div className="w-8 h-8 bg-white p-1 rounded-md shrink-0 flex items-center justify-center">
                 {/* Visual mock QR code */}
@@ -5830,10 +5830,6 @@ export default function App() {
 
       {showDriverPortal && (
         <DriverPortal lang={lang} onClose={() => setShowDriverPortal(false)} />
-      )}
-
-      {showAdminPortal && (
-        <AdminPortal lang={lang} bookings={orders} onClose={() => setShowAdminPortal(false)} />
       )}
 
     </div>

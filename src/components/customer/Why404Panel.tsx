@@ -1,6 +1,7 @@
 import React from "react";
 import { Shield, Clock, BadgeCheck, Headphones, CreditCard, Zap, Gift } from "lucide-react";
 import type { Language } from "../../types";
+import { SUPPORT_CONTACT } from "../../supportContact";
 
 interface Why404PanelProps {
   lang: Language;
@@ -26,7 +27,7 @@ export default function Why404Panel({ lang }: Why404PanelProps) {
     {
       icon: Headphones,
       title: lang === "uz" ? "24/7 yordam" : lang === "ru" ? "Поддержка 24/7" : "24/7 support",
-      desc: "support@404.taxi",
+      desc: `${SUPPORT_CONTACT.phoneDisplay} · ${SUPPORT_CONTACT.telegramHandle}`,
     },
   ];
 
@@ -98,9 +99,21 @@ export default function Why404Panel({ lang }: Why404PanelProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-[9px] text-gray-500 px-1">
-        <Clock className="w-3 h-3" />
-        <span>+998 90 123 45 67 · Toshkent · support@404.taxi</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-gray-500 px-1">
+        <Clock className="w-3 h-3 shrink-0" />
+        <a href={`tel:${SUPPORT_CONTACT.phoneTel}`} className="hover:text-teal-400 transition">
+          {SUPPORT_CONTACT.phoneDisplay}
+        </a>
+        <span>·</span>
+        <a
+          href={SUPPORT_CONTACT.telegramUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-blue-400 transition"
+        >
+          {SUPPORT_CONTACT.telegramHandle}
+        </a>
+        <span>· Toshkent</span>
       </div>
     </div>
   );
