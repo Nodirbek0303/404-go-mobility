@@ -10,6 +10,7 @@ interface OrderConfirmPanelProps {
   taxiClass: TaxiClassId;
   price: number;
   paymentProvider: PaymentProvider;
+  walletBalance?: number;
   couponCode?: string | null;
   distanceKm?: number;
   durationMin?: number;
@@ -25,6 +26,7 @@ export default function OrderConfirmPanel({
   taxiClass,
   price,
   paymentProvider,
+  walletBalance,
   couponCode,
   distanceKm,
   durationMin,
@@ -42,6 +44,15 @@ export default function OrderConfirmPanel({
     confirm: lang === "uz" ? "Zakaz qilish" : lang === "ru" ? "Заказать" : "Order now",
     coupon: lang === "uz" ? "Kupon" : lang === "ru" ? "Купон" : "Coupon",
   };
+
+  const payLabel =
+    paymentProvider === "wallet"
+      ? lang === "uz"
+        ? "404-GO Hamyon"
+        : lang === "ru"
+          ? "404-GO Кошелёк"
+          : "404-GO Wallet"
+      : paymentProvider;
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-3">
@@ -91,7 +102,12 @@ export default function OrderConfirmPanel({
               <CreditCard className="w-3.5 h-3.5 text-blue-400" />
               <div>
                 <p className="text-gray-500">{t.pay}</p>
-                <p className="text-white font-semibold capitalize">{paymentProvider}</p>
+                <p className="text-white font-semibold capitalize">{payLabel}</p>
+                {paymentProvider === "wallet" && walletBalance != null && (
+                  <p className="text-[8px] text-teal-400 font-mono mt-0.5">
+                    {walletBalance.toLocaleString()} so'm
+                  </p>
+                )}
               </div>
             </div>
           </div>

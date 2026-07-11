@@ -78,6 +78,13 @@ import SosShareBar, { callDriver } from "./components/customer/SosShareBar";
 import DriverProfileCard from "./components/customer/DriverProfileCard";
 import { useVoiceOrder } from "./hooks/useVoiceOrder";
 import {
+  appendWalletTransaction,
+  loadWalletBalance,
+  loadWalletTransactions,
+  saveWalletBalance,
+  type WalletTransaction,
+} from "./utils/walletStorage";
+import {
   loadAuth,
   loadNotifications,
   loadSavedAddresses,
@@ -327,7 +334,8 @@ export default function App() {
   const [userCommentText, setUserCommentText] = useState<string>("");
 
   // Wallet stats & forms
-  const [balance, setBalance] = useState<number>(1250000);
+  const [balance, setBalance] = useState<number>(() => loadWalletBalance());
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(() => loadWalletTransactions());
   const [cashback, setCashback] = useState<number>(125000);
   const [loyaltyPoints, setLoyaltyPoints] = useState<number>(380);
   const [activeCoupons, setActiveCoupons] = useState<Array<{ id: string; code: string; type: string; discount: number; isFlat: boolean }>>([
@@ -397,6 +405,41 @@ export default function App() {
       setHomeMapFlyKey(1);
     }
   }, [liveCoords, homeMapFlyKey]);
+
+  useEffect(() => {
+    saveWalletBalance(balance);
+  }, [balance]);
+
+  const recordWalletTx = (
+    type: WalletTransaction["type"],
+    amount: number,
+    balanceAfter: number,
+    label: WalletTransaction["label"]
+  ) => {
+    const tx: WalletTransaction = {
+      id: `wtx-${Date.now()}`,
+      type,
+      amount,
+      balanceAfter,
+      label,
+      createdAt: new Date().toISOString(),
+    };
+    appendWalletTransaction(tx);
+    setWalletTransactions((prev) => [tx, ...prev].slice(0, 100));
+  };
+
+  const promptWalletTopUp = (requiredAmount: number) => {
+    const msg =
+      lang === "uz"
+        ? `404-GO hamyonida mablag' yetarli emas. Taksi chaqirish uchun kamida ${requiredAmount.toLocaleString()} so'm kerak. Avval hamyonni to'ldiring (Payme/Click/Uzum).`
+        : lang === "ru"
+          ? `Недостаточно средств в кошельке 404-GO. Для такси нужно минимум ${requiredAmount.toLocaleString()} сум. Сначала пополните кошелёк (Payme/Click/Uzum).`
+          : `Insufficient 404-GO wallet balance. You need at least ${requiredAmount.toLocaleString()} UZS for a taxi ride. Top up via Payme/Click/Uzum first.`;
+    alert(msg);
+    speakText(msg);
+    setActiveTab("wallet");
+    setShowTopUpModal(true);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1067,6 +1110,10 @@ export default function App() {
     });
 
     if (directBookingService === "taxi") {
+      if (balance < price) {
+        promptWalletTopUp(price);
+        return;
+      }
       setShowTaxiConfirm(true);
     }
   };
@@ -1260,16 +1307,41 @@ export default function App() {
     }
 
     const providerLabel =
-      paymentProvider === "payme"
-        ? "Payme"
-        : paymentProvider === "click"
-          ? "Click"
-          : paymentProvider === "uzum"
-            ? "Uzum Bank"
-            : paymentProvider;
+      paymentProvider === "wallet"
+        ? lang === "uz"
+          ? "404-GO Hamyon"
+          : lang === "ru"
+            ? "404-GO Кошелёк"
+            : "404-GO Wallet"
+        : paymentProvider === "payme"
+          ? "Payme"
+          : paymentProvider === "click"
+            ? "Click"
+            : paymentProvider === "uzum"
+              ? "Uzum Bank"
+              : paymentProvider;
+
+    if (paymentProvider === "wallet") {
+      setBalance((prev) => {
+        const next = Math.max(0, prev - booking.price);
+        recordWalletTx("taxi", booking.price, next, {
+          uz: `Taksi · ${booking.from || ""} → ${booking.to || ""}`,
+          en: `Taxi · ${booking.from || ""} → ${booking.to || ""}`,
+          ru: `Такси · ${booking.from || ""} → ${booking.to || ""}`,
+        });
+        return next;
+      });
+    }
 
     let debitMsg = "";
-    if (useCashbackAsPayment && maxDeduct >= booking.price) {
+    if (paymentProvider === "wallet") {
+      debitMsg =
+        lang === "uz"
+          ? `404-GO hamyonidan ${booking.price.toLocaleString()} so'm yechildi!`
+          : lang === "ru"
+            ? `Списано ${booking.price.toLocaleString()} сум с кошелька 404-GO!`
+            : `${booking.price.toLocaleString()} UZS debited from 404-GO wallet!`;
+    } else if (useCashbackAsPayment && maxDeduct >= booking.price) {
       debitMsg =
         lang === "uz"
           ? `To'lov to'liq keshbek balansi (${maxDeduct.toLocaleString()} so'm) hisobidan amalga oshirildi!`
@@ -1583,6 +1655,40 @@ export default function App() {
     bookingSubmittingRef.current = true;
     setConfirmingBooking(true);
 
+    if (bookingSnapshot.type === "taxi") {
+      if (balance < bookingSnapshot.price) {
+        bookingSubmittingRef.current = false;
+        setConfirmingBooking(false);
+        promptWalletTopUp(bookingSnapshot.price);
+        return;
+      }
+
+      finalizeBooking("wallet", bookingSnapshot);
+
+      createPlatformOrder({
+        type: bookingSnapshot.type,
+        customerPhone: userProfile.phone || authSession.phone,
+        customerName: [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") || undefined,
+        from: bookingSnapshot.from || "",
+        to: bookingSnapshot.to,
+        fromCoords: bookingSnapshot.fromCoords,
+        toCoords: bookingSnapshot.toCoords,
+        price: bookingSnapshot.price,
+        tripDistanceKm:
+          bookingSnapshot.fromCoords && bookingSnapshot.toCoords
+            ? computeRouteMetrics(bookingSnapshot.fromCoords, bookingSnapshot.toCoords, bookingSnapshot.type).distanceKm
+            : undefined,
+      })
+        .then((backendOrder) => {
+          pendingServerOrderRef.current = backendOrder.id;
+          setPendingServerOrderId(backendOrder.id);
+        })
+        .catch(() => {
+          pendingServerOrderRef.current = null;
+        });
+      return;
+    }
+
     openPayment(bookingSnapshot.price, "booking", (provider) => finalizeBooking(provider, bookingSnapshot));
 
     createPlatformOrder({
@@ -1797,8 +1903,16 @@ export default function App() {
     const amount = parseInt(topUpAmount);
     if (!isNaN(amount) && amount > 0) {
       setShowTopUpModal(false);
-      openPayment(amount, "topup", () => {
-        setBalance((prev) => prev + amount);
+      openPayment(amount, "topup", (provider) => {
+        setBalance((prev) => {
+          const next = prev + amount;
+          recordWalletTx("topup", amount, next, {
+            uz: `Hamyon to'ldirish · ${provider}`,
+            en: `Wallet top-up · ${provider}`,
+            ru: `Пополнение · ${provider}`,
+          });
+          return next;
+        });
         setShowTopUpModal(false);
         pushNotification({
           type: "payment",
@@ -2088,7 +2202,15 @@ export default function App() {
       return;
     }
 
-    setBalance((prev) => prev - amount);
+    setBalance((prev) => {
+      const next = prev - amount;
+      recordWalletTx("transfer_out", amount, next, {
+        uz: `O'tkazma → ${transferPhone}`,
+        en: `Transfer → ${transferPhone}`,
+        ru: `Перевод → ${transferPhone}`,
+      });
+      return next;
+    });
     setTransferSuccess(true);
     setTransferAmount("");
     setTransferPhone("");
@@ -3122,6 +3244,46 @@ export default function App() {
                                 />
                               )}
 
+                              {customFromCoords && customToCoords && (
+                                <div
+                                  className={`p-2.5 rounded-xl border text-[9px] ${
+                                    balance >= getCalculatedPrice()
+                                      ? "border-teal-500/30 bg-teal-500/5 text-teal-200"
+                                      : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                                  }`}
+                                >
+                                  <p className="font-bold">
+                                    {lang === "uz" ? "404-GO Hamyon" : lang === "ru" ? "404-GO Кошелёк" : "404-GO Wallet"}:{" "}
+                                    <span className="font-mono">{balance.toLocaleString()} so'm</span>
+                                  </p>
+                                  <p className="mt-1 opacity-90">
+                                    {balance >= getCalculatedPrice()
+                                      ? lang === "uz"
+                                        ? `To'lov hamyondan yechildi · kerak: ${getCalculatedPrice().toLocaleString()} so'm`
+                                        : lang === "ru"
+                                          ? `Оплата с кошелька · нужно: ${getCalculatedPrice().toLocaleString()} сум`
+                                          : `Paid from wallet · need: ${getCalculatedPrice().toLocaleString()} UZS`
+                                      : lang === "uz"
+                                        ? `Balans yetarli emas! Kamida ${getCalculatedPrice().toLocaleString()} so'm to'ldiring.`
+                                        : lang === "ru"
+                                          ? `Недостаточно средств! Пополните минимум на ${getCalculatedPrice().toLocaleString()} сум.`
+                                          : `Insufficient balance! Top up at least ${getCalculatedPrice().toLocaleString()} UZS.`}
+                                  </p>
+                                  {balance < getCalculatedPrice() && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab("wallet");
+                                        setShowTopUpModal(true);
+                                      }}
+                                      className="mt-2 w-full py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-100 font-bold"
+                                    >
+                                      {lang === "uz" ? "Hamyonni to'ldirish" : lang === "ru" ? "Пополнить кошелёк" : "Top up wallet"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
                             </>
                           ) : (
                             <>
@@ -3371,7 +3533,7 @@ export default function App() {
                               onClick={() => void submitDirectBooking()}
                               disabled={
                                 directBookingService === "taxi"
-                                  ? !customFromCoords || !customToCoords
+                                  ? !customFromCoords || !customToCoords || balance < getCalculatedPrice()
                                   : !directFromText.trim() ||
                                     (!SINGLE_LOCATION_SERVICES.includes(directBookingService) && !directToText.trim())
                               }
@@ -3981,12 +4143,21 @@ export default function App() {
                             <p className="text-[9px] text-gray-500 mt-1 flex items-center gap-1 leading-none">
                               <span>
                                 {lang === "uz"
-                                  ? "To'lovlar Payme, Click yoki Uzum orqali amalga oshiriladi"
+                                  ? "Taksi uchun avval Payme/Click/Uzum orqali hamyonni to'ldiring"
                                   : lang === "ru"
-                                    ? "Оплата через Payme, Click или Uzum"
-                                    : "Pay via Payme, Click, or Uzum"}
+                                    ? "Для такси сначала пополните кошелёк через Payme/Click/Uzum"
+                                    : "Top up wallet via Payme/Click/Uzum before ordering a taxi"}
                               </span>
                             </p>
+                            {balance <= 0 && (
+                              <p className="text-[9px] text-amber-400 mt-1.5 font-medium">
+                                {lang === "uz"
+                                  ? "Balans 0 — taksi chaqirib bo'lmaydi"
+                                  : lang === "ru"
+                                    ? "Баланс 0 — такси недоступен"
+                                    : "Balance 0 — taxi unavailable"}
+                              </p>
+                            )}
                           </div>
                           <button
                             onClick={() => setShowTopUpModal(true)}
@@ -3995,6 +4166,41 @@ export default function App() {
                             + {lang === "uz" ? "Balans to'ldirish" : lang === "ru" ? "Пополнить" : "Top up"}
                           </button>
                         </div>
+
+                        {walletTransactions.length > 0 && (
+                          <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 space-y-2">
+                            <p className="text-[9px] font-mono text-teal-400 uppercase tracking-widest">
+                              {lang === "uz" ? "Hamyon tarixi" : lang === "ru" ? "История кошелька" : "Wallet history"}
+                            </p>
+                            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1 scrollbar-thin">
+                              {walletTransactions.slice(0, 12).map((tx) => (
+                                <div
+                                  key={tx.id}
+                                  className="flex items-center justify-between gap-2 text-[9px] border-b border-slate-900/80 pb-1.5 last:border-0"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-gray-300 truncate">{tx.label[lang]}</p>
+                                    <p className="text-gray-600 font-mono text-[8px]">
+                                      {new Date(tx.createdAt).toLocaleString(
+                                        lang === "ru" ? "ru-RU" : lang === "en" ? "en-US" : "uz-UZ"
+                                      )}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`font-mono font-bold shrink-0 ${
+                                      tx.type === "topup" || tx.type === "transfer_in" || tx.type === "refund"
+                                        ? "text-emerald-400"
+                                        : "text-red-400"
+                                    }`}
+                                  >
+                                    {tx.type === "topup" || tx.type === "transfer_in" || tx.type === "refund" ? "+" : "−"}
+                                    {tx.amount.toLocaleString()}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 flex items-center justify-between">
                           <div>
@@ -5834,7 +6040,8 @@ export default function App() {
           to={pendingBooking.to || ""}
           taxiClass={selectedTaxiClass}
           price={pendingBooking.price}
-          paymentProvider={selectedPaymentProvider}
+          paymentProvider="wallet"
+          walletBalance={balance}
           couponCode={appliedCouponId ? activeCoupons.find((c) => c.id === appliedCouponId)?.code : null}
           distanceKm={
             pendingBooking.fromCoords && pendingBooking.toCoords
