@@ -228,17 +228,21 @@ export default function App() {
 
   const unreadNotificationCount = notifications.filter((n) => !n.read).length;
 
-  const handleAuthVerified = (phone: string) => {
+  const handleAuthVerified = (phone: string, displayName?: string) => {
     setAuthSession(loadAuth());
     setShowAuthModal(false);
-    setUserProfile((prev) => ({ ...prev, phone }));
+    setUserProfile((prev) => ({
+      ...prev,
+      phone,
+      ...(displayName ? { firstName: displayName.split(" ")[0], lastName: displayName.split(" ").slice(1).join(" ") } : {}),
+    }));
     pushNotification({
       type: "system",
-      title: { uz: "Xush kelibsiz!", en: "Welcome!", ru: "Добро пожаловать!" },
+      title: { uz: "Hisob tasdiqlandi!", en: "Account verified!", ru: "Аккаунт подтверждён!" },
       body: {
-        uz: `${phone} raqami tasdiqlandi. 404-GO xizmatlaridan foydalanishingiz mumkin.`,
-        en: `${phone} verified. You can use 404-GO services.`,
-        ru: `${phone} подтверждён. Можете пользоваться 404-GO.`,
+        uz: `${displayName || phone} — telefon raqami muvaffaqiyatli tasdiqlandi. 404-GO ga xush kelibsiz!`,
+        en: `${displayName || phone} — phone verified. Welcome to 404-GO!`,
+        ru: `${displayName || phone} — телефон подтверждён. Добро пожаловать в 404-GO!`,
       },
     });
   };
@@ -3673,7 +3677,7 @@ export default function App() {
                           <div className="flex items-center justify-between bg-teal-500/10 border border-teal-500/20 rounded-lg px-2.5 py-2">
                             <div>
                               <p className="text-[9px] text-teal-400 font-bold">
-                                {lang === "uz" ? "SMS orqali kirilgan" : lang === "ru" ? "Вход по SMS" : "SMS verified"}
+                                {lang === "uz" ? "Telefon tasdiqlangan" : lang === "ru" ? "Телефон подтверждён" : "Phone verified"}
                               </p>
                               <p className="text-[10px] text-white font-mono">{authSession.phone}</p>
                             </div>
@@ -3691,7 +3695,7 @@ export default function App() {
                             onClick={() => setShowAuthModal(true)}
                             className="w-full py-2 bg-teal-400/15 border border-teal-400/30 text-teal-300 text-[10px] font-bold rounded-lg"
                           >
-                            {lang === "uz" ? "SMS orqali kirish" : lang === "ru" ? "Войти по SMS" : "Sign in with SMS"}
+                            {lang === "uz" ? "Telefonni tasdiqlash" : lang === "ru" ? "Подтвердить телефон" : "Verify phone"}
                           </button>
                         )}
 

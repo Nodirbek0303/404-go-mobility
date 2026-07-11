@@ -94,6 +94,14 @@ export interface AuthSession {
   phone: string;
   verifiedAt: string;
   token: string;
+  verifyMethod: "screen";
+  displayName?: string;
+}
+
+export interface VerifiedUserRecord {
+  phone: string;
+  displayName?: string;
+  verifiedAt: string;
 }
 
 export interface SavedAddress {
