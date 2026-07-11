@@ -31,6 +31,9 @@ interface MapLibreProps {
   showRoute?: boolean;
   /** true = foydalanuvchi xaritani erkin siljita oladi, avto-markazlash yo'q */
   lockCamera?: boolean;
+  /** Bir martalik kamera — GPS yoki tanlangan nuqtaga */
+  initialFlyTo?: { latitude: number; longitude: number } | null;
+  initialFlyToKey?: number;
   onMapClick?: (lat: number, lng: number, name: string) => void;
   onFromMoved?: (lat: number, lng: number) => void;
   onToMoved?: (lat: number, lng: number) => void;
@@ -88,6 +91,8 @@ export default function MapLibre({
   driverName = "Haydovchi",
   showRoute = false,
   lockCamera = false,
+  initialFlyTo,
+  initialFlyToKey = 0,
   onMapClick,
   onFromMoved,
   onToMoved,
@@ -296,6 +301,24 @@ export default function MapLibre({
   useEffect(() => {
     if (lockCamera) didFitBothRef.current = false;
   }, [lockCamera]);
+
+  const lastFlownKeyRef = useRef(-1);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !initialFlyTo || initialFlyToKey <= 0) return;
+    if (lastFlownKeyRef.current >= initialFlyToKey) return;
+    lastFlownKeyRef.current = initialFlyToKey;
+    map.easeTo({
+      center: [initialFlyTo.longitude, initialFlyTo.latitude],
+      zoom: 15,
+      duration: 700,
+    });
+  }, [
+    ready,
+    initialFlyToKey,
+    initialFlyTo?.latitude,
+    initialFlyTo?.longitude,
+  ]);
 
   // Yo'l chizig'i
   useEffect(() => {

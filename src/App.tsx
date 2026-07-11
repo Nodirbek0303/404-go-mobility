@@ -383,7 +383,20 @@ export default function App() {
   const bookingSubmittingRef = useRef(false);
   const lastFinalizedBookingKeyRef = useRef<string | null>(null);
   const [confirmingBooking, setConfirmingBooking] = useState(false);
-  const { coords: liveCoords, tracking: liveTracking, startTracking } = useLiveLocation();
+  const { coords: liveCoords, tracking: liveTracking, startTracking, requestOnce } = useLiveLocation();
+  const [mapFlyKey, setMapFlyKey] = useState(0);
+  const [homeMapFlyKey, setHomeMapFlyKey] = useState(0);
+  const prevDirectServiceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    startTracking();
+  }, [startTracking]);
+
+  useEffect(() => {
+    if (liveCoords && homeMapFlyKey === 0) {
+      setHomeMapFlyKey(1);
+    }
+  }, [liveCoords, homeMapFlyKey]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -631,17 +644,61 @@ export default function App() {
     }
   }, [selectedOrder?.id, selectedOrder?.status, selectedOrder?.type, startTracking]);
 
-  useEffect(() => {
-    if (directBookingService === "taxi") {
-      setMapPickStep("pickup");
-      setPinMode("from");
-      setCustomFromCoords(null);
-      setCustomToCoords(null);
-      setDirectFromText("");
-      setDirectToText("");
-      setGpsPickupActive(false);
+  const beginDirectBooking = (serviceId: string) => {
+    if (directBookingService === serviceId) return;
+
+    setDirectBookingService(serviceId);
+    if (SINGLE_LOCATION_SERVICES.includes(serviceId)) {
+      if (serviceId === "parking") {
+        applyParkingLot(PARKING_LOTS[0].id);
+      } else {
+        applyEvStation(EV_STATIONS[0].id);
+      }
+      return;
     }
-  }, [directBookingService]);
+
+    openDirectBookingDefaults(serviceId, {
+      setDirectFromText,
+      setDirectToText,
+      setCustomFromCoords,
+      setCustomToCoords,
+      setGpsPickupActive,
+      setPinMode,
+    });
+    if (serviceId === "cargo") setSelectedCargoTruck(CARGO_TRUCKS[0].id);
+    if (serviceId === "delivery") setSelectedDeliveryVehicle(DELIVERY_VEHICLES[1].id);
+  };
+
+  useEffect(() => {
+    const prev = prevDirectServiceRef.current;
+    prevDirectServiceRef.current = directBookingService;
+
+    if (directBookingService !== "taxi" || prev === "taxi") return;
+
+    setMapPickStep("pickup");
+    setPinMode("from");
+    setMapFlyKey((k) => k + 1);
+    startTracking();
+
+    void (async () => {
+      const loc = liveCoords ?? (await requestOnce());
+      if (!loc || directBookingServiceRef.current !== "taxi") return;
+
+      let placedA = false;
+      setCustomFromCoords((prev) => {
+        if (prev) return prev;
+        placedA = true;
+        return { latitude: loc.latitude, longitude: loc.longitude };
+      });
+      if (placedA) {
+        setDirectFromText(formatMapPointLabel(loc.latitude, loc.longitude, lang, "A"));
+        setMapPickStep("dropoff");
+        setPinMode("to");
+        mapPickStepRef.current = "dropoff";
+        pinModeRef.current = "to";
+      }
+    })();
+  }, [directBookingService, startTracking, requestOnce, liveCoords, lang]);
 
   useEffect(() => {
     if (!gpsPickupActive || !liveCoords || !liveTracking) return;
@@ -2987,7 +3044,9 @@ export default function App() {
                                   lockCamera
                                   pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
                                   liveUserCoords={liveCoords}
-                                  liveTracking={liveTracking && gpsPickupActive}
+                                  liveTracking={liveTracking}
+                                  initialFlyTo={customFromCoords ?? liveCoords}
+                                  initialFlyToKey={mapFlyKey}
                                   activeFrom={directFromText || (lang === "uz" ? "A — taksi keladi" : "A — pickup")}
                                   activeTo={directToText || (lang === "uz" ? "B — borish joyi" : "B — destination")}
                                   serviceMode="taxi"
@@ -3347,17 +3406,7 @@ export default function App() {
                               placeholder={t.search_placeholder}
                               className="bg-transparent text-xs text-white focus:outline-none w-full cursor-pointer placeholder:text-gray-500"
                               readOnly
-                              onClick={() => {
-                                setDirectBookingService("taxi");
-                                openDirectBookingDefaults("taxi", {
-                                  setDirectFromText,
-                                  setDirectToText,
-                                  setCustomFromCoords,
-                                  setCustomToCoords,
-                                  setGpsPickupActive,
-                                  setPinMode,
-                                });
-                              }}
+                              onClick={() => beginDirectBooking("taxi")}
                             />
                             
                             <button
@@ -3399,27 +3448,7 @@ export default function App() {
                               {serviceCategories.map((cat) => (
                                 <div
                                   key={cat.id}
-                                  onClick={() => {
-                                    setDirectBookingService(cat.id);
-                                    if (SINGLE_LOCATION_SERVICES.includes(cat.id)) {
-                                      if (cat.id === "parking") {
-                                        applyParkingLot(PARKING_LOTS[0].id);
-                                      } else {
-                                        applyEvStation(EV_STATIONS[0].id);
-                                      }
-                                    } else {
-                                      openDirectBookingDefaults(cat.id, {
-                                        setDirectFromText,
-                                        setDirectToText,
-                                        setCustomFromCoords,
-                                        setCustomToCoords,
-                                        setGpsPickupActive,
-                                        setPinMode,
-                                      });
-                                      if (cat.id === "cargo") setSelectedCargoTruck(CARGO_TRUCKS[0].id);
-                                      if (cat.id === "delivery") setSelectedDeliveryVehicle(DELIVERY_VEHICLES[1].id);
-                                    }
-                                  }}
+                                  onClick={() => beginDirectBooking(cat.id)}
                                   className="nexgo-service-tile flex flex-col items-center justify-center text-center group"
                                 >
                                   {cat.badge && (
@@ -5094,6 +5123,8 @@ export default function App() {
                 compact={directBookingService === "taxi"}
                 liveUserCoords={liveCoords}
                 liveTracking={liveTracking}
+                initialFlyTo={liveCoords}
+                initialFlyToKey={homeMapFlyKey}
                 driverCoords={selectedOrder?.driverCoords ?? null}
                 etaMinutes={
                   selectedOrder?.status === "active" &&
