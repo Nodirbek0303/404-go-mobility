@@ -36,6 +36,10 @@ interface MapComponentProps {
   customToCoords?: { latitude: number; longitude: number } | null;
   serviceMode?: "taxi" | "delivery" | "cargo" | "parking" | "ev_charge" | null;
   selectedServicePointId?: string | null;
+  liveUserCoords?: { latitude: number; longitude: number } | null;
+  driverCoords?: { latitude: number; longitude: number } | null;
+  etaMinutes?: number | null;
+  liveTracking?: boolean;
 }
 
 export default function MapComponent({
@@ -51,30 +55,49 @@ export default function MapComponent({
   customToCoords = null,
   serviceMode = null,
   selectedServicePointId = null,
+  liveUserCoords = null,
+  driverCoords = null,
+  etaMinutes = null,
+  liveTracking = false,
 }: MapComponentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [trafficMode, setTrafficMode] = useState<"tez" | "ortacha" | "sekin">("tez");
   const [carProgress, setCarProgress] = useState(0);
-  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [internalUserCoords, setInternalUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locating, setLocating] = useState(false);
 
-  // Auto get location on load if supported
+  const userCoords = liveUserCoords ?? internalUserCoords;
+
+  // Tashqi live GPS yoki bir martalik aniqlash
   useEffect(() => {
+    if (liveUserCoords || liveTracking) return;
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setUserCoords({
+          setInternalUserCoords({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
           });
         },
-        (error) => {
-          console.log("Auto-location failed or prompt skipped:", error);
-        },
+        () => {},
         { timeout: 4000 }
       );
     }
-  }, []);
+  }, [liveUserCoords, liveTracking]);
+
+  useEffect(() => {
+    if (!liveTracking || !navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (pos) =>
+        setInternalUserCoords({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+        }),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 2000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [liveTracking]);
 
   const handleGetLocation = () => {
     if (!navigator.geolocation) {
@@ -83,22 +106,16 @@ export default function MapComponent({
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setUserCoords({
+        setInternalUserCoords({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         });
         setLocating(false);
       },
-      (error) => {
-        console.warn("Geolocation permission not granted or error. Pinning custom live anchor point.", error);
-        // Fallback to active center coordinate with slight random jitter
-        setUserCoords({
-          latitude: 41.311081 + (Math.random() - 0.5) * 0.008,
-          longitude: 69.240562 + (Math.random() - 0.5) * 0.008,
-        });
+      () => {
         setLocating(false);
       },
-      { enableHighAccuracy: true, timeout: 5000 }
+      { enableHighAccuracy: true, timeout: 10000 }
     );
   };
 
@@ -393,11 +410,18 @@ export default function MapComponent({
         ctx.font = "bold 8px sans-serif";
         ctx.fillText("B", bx - 3, by + 3);
 
-        // Calculate animated driver icon position along quadratic curve path
-        const t = carProgress;
-        // Quadratic bezier formula: (1-t)^2 * p0 + 2*(1-t)*t * p1 + t^2 * p2
-        const cx = Math.pow(1 - t, 2) * ax + 2 * (1 - t) * t * tx + Math.pow(t, 2) * bx;
-        const cy = Math.pow(1 - t, 2) * ay + 2 * (1 - t) * t * ty + Math.pow(t, 2) * by;
+        // Haydovchi — GPS koordinata bo'lsa aniq nuqta
+        let cx: number;
+        let cy: number;
+        if (driverCoords) {
+          const dp = getCanvasXY("", driverCoords, w, h);
+          cx = dp.x;
+          cy = dp.y;
+        } else {
+          const t = carProgress;
+          cx = Math.pow(1 - t, 2) * ax + 2 * (1 - t) * t * tx + Math.pow(t, 2) * bx;
+          cy = Math.pow(1 - t, 2) * ay + 2 * (1 - t) * t * ty + Math.pow(t, 2) * by;
+        }
 
         // Radar waves
         const wave = (Date.now() % 1200) / 1200;
@@ -461,7 +485,7 @@ export default function MapComponent({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [trafficMode, carProgress, showRoute, activeFrom, activeTo, customFromCoords, customToCoords, userCoords, lang, serviceMode, selectedServicePointId]);
+  }, [trafficMode, carProgress, showRoute, activeFrom, activeTo, customFromCoords, customToCoords, userCoords, liveUserCoords, driverCoords, lang, serviceMode, selectedServicePointId]);
 
   return (
     <div className="relative w-full h-full min-h-[220px] rounded-xl overflow-hidden border border-slate-800 bg-[#0c111d] flex flex-col group">
@@ -505,14 +529,29 @@ export default function MapComponent({
         </button>
 
         {userCoords && (
-          <div className="bg-slate-950/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-800 text-[9px] font-mono text-gray-400 flex items-center gap-1.5 shadow-lg">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          <div className="bg-slate-950/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-blue-500/40 text-[9px] font-mono text-blue-300 flex items-center gap-1.5 shadow-lg">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
             <span>
+              {lang === "uz" ? "Siz:" : lang === "ru" ? "Вы:" : "You:"}{" "}
               {userCoords.latitude.toFixed(5)}, {userCoords.longitude.toFixed(5)}
             </span>
           </div>
         )}
       </div>
+
+      {/* Haydovchi ETA */}
+      {etaMinutes != null && etaMinutes >= 0 && (
+        <div className="absolute bottom-3 left-3 right-3 z-20 flex justify-center pointer-events-none">
+          <div className="bg-teal-500/95 text-slate-950 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg flex items-center gap-2 animate-pulse">
+            <Navigation className="w-3 h-3" />
+            {lang === "uz"
+              ? `Haydovchi ~${etaMinutes} daqiqada yetib keladi`
+              : lang === "ru"
+                ? `Водитель через ~${etaMinutes} мин`
+                : `Driver arriving in ~${etaMinutes} min`}
+          </div>
+        </div>
+      )}
 
       {/* Map floating controls */}
       <div className="absolute top-3 right-3 flex flex-col gap-1 bg-slate-950/80 backdrop-blur-sm p-1.5 rounded-lg border border-slate-800 text-[10px] text-gray-400">

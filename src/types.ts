@@ -130,5 +130,5 @@ export interface AppNotification {
   orderId?: string;
 }
 
-export type PaymentProvider = "payme" | "click" | "uzum" | "card";
+export type PaymentProvider = "payme" | "click" | "uzum";
 

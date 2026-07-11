@@ -4,19 +4,24 @@ import MapLibre from "./MapLibre";
 
 type MapProps = React.ComponentProps<typeof MapComponent> & {
   driverCoords?: { latitude: number; longitude: number } | null;
-  /** Kichik embed — canvas xarita (buyurtma formasi) */
+  liveUserCoords?: { latitude: number; longitude: number } | null;
+  etaMinutes?: number | null;
   compact?: boolean;
 };
 
-/**
- * compact=true — barqaror canvas xarita (buyurtma berish)
- * compact=false — MapLibre + OSM (faol safar), xato bo'lsa canvas
- */
-export default function SmartMap({ compact = true, ...props }: MapProps) {
+export default function SmartMap({ compact = true, liveUserCoords, etaMinutes, driverCoords, ...props }: MapProps) {
   const [useFallback, setUseFallback] = useState(false);
 
+  const shared = {
+    ...props,
+    liveUserCoords,
+    driverCoords,
+    etaMinutes,
+    liveTracking: props.liveTracking ?? !!liveUserCoords,
+  };
+
   if (compact || useFallback) {
-    return <MapComponent {...props} />;
+    return <MapComponent {...shared} />;
   }
 
   return (
@@ -28,7 +33,9 @@ export default function SmartMap({ compact = true, ...props }: MapProps) {
       onMapClick={props.onMapClick}
       customFromCoords={props.customFromCoords}
       customToCoords={props.customToCoords}
-      driverCoords={props.driverCoords}
+      driverCoords={driverCoords}
+      liveUserCoords={liveUserCoords}
+      etaMinutes={etaMinutes}
       onFailed={() => setUseFallback(true)}
     />
   );

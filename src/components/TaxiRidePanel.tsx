@@ -32,6 +32,7 @@ interface TaxiRidePanelProps {
   userProfile: UserProfile;
   lang: Language;
   t: Translations;
+  liveUserCoords?: { latitude: number; longitude: number } | null;
   onUpdateOrder: (orderId: string, updates: Partial<Booking>) => void;
   onCancel?: (order: Booking) => void;
 }
@@ -53,6 +54,7 @@ export default function TaxiRidePanel({
   userProfile,
   lang,
   t,
+  liveUserCoords = null,
   onUpdateOrder,
   onCancel,
 }: TaxiRidePanelProps) {
@@ -60,10 +62,11 @@ export default function TaxiRidePanel({
   const chatEndRef = useRef<HTMLDivElement>(null);
   const simulationStartedFor = useRef<string | null>(null);
 
-  const fromLat = order.fromCoords?.latitude ?? 41.3216;
-  const fromLng = order.fromCoords?.longitude ?? 69.2285;
-  const toLat = order.toCoords?.latitude ?? 41.3031;
-  const toLng = order.toCoords?.longitude ?? 69.2486;
+  const fromLat = order.fromCoords?.latitude;
+  const fromLng = order.fromCoords?.longitude;
+  const toLat = order.toCoords?.latitude;
+  const toLng = order.toCoords?.longitude;
+  const hasRoute = fromLat != null && fromLng != null && toLat != null && toLng != null;
 
   const phase = order.ridePhase ?? "searching";
   const driverChat = order.driverChat ?? [];
@@ -76,7 +79,7 @@ export default function TaxiRidePanel({
   useEffect(() => {
     if (order.status !== "active" || order.type !== "taxi") return;
     if (phase !== "searching" || simulationStartedFor.current === order.id) return;
-    if (!order.serverOrderId) return;
+    if (!order.serverOrderId || !hasRoute || fromLat == null || fromLng == null) return;
 
     simulationStartedFor.current = order.id;
 
@@ -113,7 +116,7 @@ export default function TaxiRidePanel({
       .catch(() => {
         simulationStartedFor.current = null;
       });
-  }, [order.id, order.status, order.type, order.serverOrderId, phase, lang, onUpdateOrder, fromLat, fromLng]);
+  }, [order.id, order.status, order.type, order.serverOrderId, phase, lang, onUpdateOrder, fromLat, fromLng, hasRoute]);
 
   // SSE/WebSocket real-time sync
   useEffect(() => {
@@ -134,9 +137,9 @@ export default function TaxiRidePanel({
     return unsub;
   }, [order.id, order.serverOrderId, phase, onUpdateOrder]);
 
-  // ETA countdown while arriving
+  // ETA countdown while driver is on the way
   useEffect(() => {
-    if (phase !== "arriving" || order.etaMinutes == null || order.etaMinutes <= 0) return;
+    if ((phase !== "arriving" && phase !== "accepted") || order.etaMinutes == null || order.etaMinutes <= 0) return;
     const interval = window.setInterval(() => {
       const next = Math.max(0, (order.etaMinutes ?? 1) - 1);
       onUpdateOrder(order.id, { etaMinutes: next });
@@ -151,6 +154,7 @@ export default function TaxiRidePanel({
   useEffect(() => {
     if (order.status !== "active" || order.type !== "taxi") return;
     if (phase === "searching" || !order.driverStartCoords) return;
+    if (!hasRoute || fromLat == null || fromLng == null || toLat == null || toLng == null) return;
 
     const pickup = { latitude: fromLat, longitude: fromLng };
     const dest = { latitude: toLat, longitude: toLng };
@@ -195,13 +199,14 @@ export default function TaxiRidePanel({
     toLat,
     toLng,
     onUpdateOrder,
+    hasRoute,
   ]);
 
   const cancelPreview = calculateCancelFee(order);
 
   const phaseLabel = () => {
     if (phase === "searching") return t.taxi_searching;
-    if (phase === "accepted") return t.taxi_accepted;
+    if (phase === "accepted") return `${t.taxi_accepted} · ${order.etaMinutes ?? "—"} ${t.taxi_minutes}`;
     if (phase === "arriving") return `${t.taxi_arriving} · ${order.etaMinutes ?? "—"} ${t.taxi_minutes}`;
     return t.taxi_in_ride;
   };
@@ -259,6 +264,7 @@ export default function TaxiRidePanel({
   };
 
   const openMaps = (provider: "google" | "yandex" | "2gis") => {
+    if (!hasRoute || fromLat == null || fromLng == null || toLat == null || toLng == null) return;
     if (provider === "google") {
       openExternalMap(googleMapsDirections(fromLat, fromLng, toLat, toLng));
     } else if (provider === "yandex") {
@@ -329,20 +335,29 @@ export default function TaxiRidePanel({
         <div className="h-32 rounded-xl overflow-hidden border border-teal-500/20 shadow-inner shadow-teal-500/5">
           <SmartMap
             compact={false}
-            activeFrom={order.from ?? "Chorsu"}
-            activeTo={order.to ?? "Magic City"}
+            activeFrom={order.from ?? ""}
+            activeTo={order.to ?? ""}
             driverName={driverFullName}
             driverStatus={driverStatusForMap}
-            showRoute={phase !== "searching"}
+            showRoute={phase !== "searching" && hasRoute}
             lang={lang}
             customFromCoords={order.fromCoords ?? null}
             customToCoords={order.toCoords ?? null}
+            liveUserCoords={liveUserCoords}
+            liveTracking={!!liveUserCoords}
             driverCoords={order.driverCoords ?? null}
+            etaMinutes={phase !== "searching" ? (order.etaMinutes ?? null) : null}
           />
         </div>
-        {phase === "arriving" && order.etaMinutes != null && order.etaMinutes > 0 && (
+        {phase !== "searching" && order.etaMinutes != null && order.etaMinutes > 0 && (
           <p className="text-[9px] text-center text-teal-400 font-mono animate-pulse">
-            {t.taxi_eta}: {order.etaMinutes} {t.taxi_minutes}
+            {phase === "in_ride"
+              ? (lang === "uz"
+                  ? `Manzilga ~${order.etaMinutes} daqiqa`
+                  : lang === "ru"
+                    ? `До пункта ~${order.etaMinutes} мин`
+                    : `~${order.etaMinutes} min to destination`)
+              : `${t.taxi_eta}: ${order.etaMinutes} ${t.taxi_minutes}`}
           </p>
         )}
         {phase !== "searching" && (order.driverDistanceKm ?? 0) > 0 && (

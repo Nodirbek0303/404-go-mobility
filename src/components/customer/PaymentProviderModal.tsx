@@ -16,7 +16,6 @@ const providers: { id: PaymentProvider; name: string; color: string; logo: strin
   { id: "payme", name: "Payme", color: "from-emerald-500/20 to-teal-600/10", logo: "P" },
   { id: "click", name: "Click", color: "from-blue-500/20 to-cyan-600/10", logo: "C" },
   { id: "uzum", name: "Uzum Bank", color: "from-violet-500/20 to-purple-600/10", logo: "U" },
-  { id: "card", name: "404-GO Wallet", color: "from-teal-500/20 to-emerald-600/10", logo: "W" },
 ];
 
 export default function PaymentProviderModal({
@@ -162,7 +161,7 @@ export default function PaymentProviderModal({
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {providers.map((p) => (
                 <button
                   key={p.id}

@@ -57,8 +57,9 @@ import { Language, Booking, ChatMessage, TransitRoute, UserProfile, AppNotificat
 import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
 import SmartMap from "./components/maps/SmartMap";
 import DriverPortal from "./components/driver/DriverPortal";
-import { cancelPlatformOrder, createPlatformOrder } from "./services/platformApi";
+import { cancelPlatformOrder, createPlatformOrder, geocodeAddress } from "./services/platformApi";
 import { initFirebaseMessaging } from "./services/fcm";
+import { useLiveLocation } from "./hooks/useLiveLocation";
 import UIUXShowcase from "./components/UIUXShowcase";
 import TaxiRidePanel from "./components/TaxiRidePanel";
 import AuthModal from "./components/customer/AuthModal";
@@ -108,6 +109,57 @@ import {
 
 type BookingType = Booking["type"];
 const SINGLE_LOCATION_SERVICES = ["parking", "ev_charge"];
+
+function lookupLocationByText(text: string): { latitude: number; longitude: number } | null {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return null;
+  for (const loc of TASHKENT_LOCATIONS) {
+    const names = [loc.name.uz, loc.name.en, loc.name.ru].map((n) => n.toLowerCase());
+    if (names.some((n) => normalized === n || normalized.includes(n) || n.includes(normalized))) {
+      return { latitude: loc.lat, longitude: loc.lng };
+    }
+  }
+  return null;
+}
+
+async function resolveLocationCoords(
+  text: string,
+  existing: { latitude: number; longitude: number } | null,
+  near?: { latitude: number; longitude: number } | null
+): Promise<{ latitude: number; longitude: number } | null> {
+  if (existing) return existing;
+  const fromCatalog = lookupLocationByText(text);
+  if (fromCatalog) return fromCatalog;
+  const q = text.trim();
+  if (!q) return null;
+  try {
+    const hits = await geocodeAddress(q, near?.latitude, near?.longitude);
+    if (hits[0]) return { latitude: hits[0].latitude, longitude: hits[0].longitude };
+  } catch {
+    /* geocode optional */
+  }
+  return null;
+}
+
+function openDirectBookingDefaults(
+  serviceId: string,
+  setters: {
+    setDirectFromText: (v: string) => void;
+    setDirectToText: (v: string) => void;
+    setCustomFromCoords: (v: { latitude: number; longitude: number } | null) => void;
+    setCustomToCoords: (v: { latitude: number; longitude: number } | null) => void;
+    setGpsPickupActive: (v: boolean) => void;
+    setPinMode: (v: "from" | "to" | null) => void;
+  }
+) {
+  setters.setPinMode(null);
+  setters.setGpsPickupActive(false);
+  if (SINGLE_LOCATION_SERVICES.includes(serviceId)) return;
+  setters.setDirectFromText("");
+  setters.setDirectToText("");
+  setters.setCustomFromCoords(null);
+  setters.setCustomToCoords(null);
+}
 
 function toBookingType(serviceId: string): BookingType {
   if (serviceId === "delivery") return "delivery";
@@ -200,18 +252,6 @@ export default function App() {
   const [transferAmount, setTransferAmount] = useState("");
   const [transferSuccess, setTransferSuccess] = useState(false);
 
-  // Payment Cards
-  const [paymentCards, setPaymentCards] = useState([
-    { id: "card-uzcard", name: "Uzcard", logo: "UZCARD", number: "8600 4321 •••• 9876", expiry: "12/28", balance: 1250000, active: true },
-    { id: "card-humo", name: "Humo", logo: "HUMO", number: "9860 8765 •••• 1234", expiry: "10/29", balance: 450000, active: false },
-    { id: "card-visa", name: "Visa Gold", logo: "VISA", number: "4000 1024 •••• 5678", expiry: "05/30", balance: 2500000, active: false },
-  ]);
-  const [newCardNumber, setNewCardNumber] = useState("");
-  const [newCardExpiry, setNewCardExpiry] = useState("");
-  const [newCardCvv, setNewCardCvv] = useState("");
-  const [newCardType, setNewCardType] = useState<"Uzcard" | "Humo" | "Visa" | "Mastercard">("Uzcard");
-  const [newCardStartBalance, setNewCardStartBalance] = useState("500000");
-  const [showAddCard, setShowAddCard] = useState(false);
   const [showShowcaseModal, setShowShowcaseModal] = useState(false);
   const [showShowcaseInsideApp, setShowShowcaseInsideApp] = useState(false);
 
@@ -237,6 +277,7 @@ export default function App() {
   const [scheduledDateTime, setScheduledDateTime] = useState("");
   const paymentCallbackRef = useRef<((provider: PaymentProvider) => void) | null>(null);
   const pendingServerOrderRef = useRef<string | null>(null);
+  const { coords: liveCoords, tracking: liveTracking, startTracking } = useLiveLocation();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -457,10 +498,11 @@ export default function App() {
 
   // Manual direct booking states without AI Chat transition
   const [directBookingService, setDirectBookingService] = useState<string | null>(null);
-  const [directFromText, setDirectFromText] = useState("Chorsu bozori");
-  const [directToText, setDirectToText] = useState("Magic City bog'i");
-  const [customFromCoords, setCustomFromCoords] = useState<{ latitude: number; longitude: number } | null>({ latitude: 41.3216, longitude: 69.2285 });
-  const [customToCoords, setCustomToCoords] = useState<{ latitude: number; longitude: number } | null>({ latitude: 41.3031, longitude: 69.2486 });
+  const [directFromText, setDirectFromText] = useState("");
+  const [directToText, setDirectToText] = useState("");
+  const [customFromCoords, setCustomFromCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [customToCoords, setCustomToCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [gpsPickupActive, setGpsPickupActive] = useState(false);
   const [pinMode, setPinMode] = useState<"from" | "to" | null>(null);
   const [selectedCargoTruck, setSelectedCargoTruck] = useState(CARGO_TRUCKS[0].id);
   const [selectedDeliveryVehicle, setSelectedDeliveryVehicle] = useState(DELIVERY_VEHICLES[1].id);
@@ -468,6 +510,24 @@ export default function App() {
   const [cargoWeightTon, setCargoWeightTon] = useState("1.5");
   const [selectedParkingId, setSelectedParkingId] = useState(PARKING_LOTS[0].id);
   const [selectedEvStationId, setSelectedEvStationId] = useState(EV_STATIONS[0].id);
+
+  useEffect(() => {
+    if (selectedOrder?.status === "active" && selectedOrder?.type === "taxi") {
+      startTracking();
+    }
+  }, [selectedOrder?.id, selectedOrder?.status, selectedOrder?.type, startTracking]);
+
+  useEffect(() => {
+    if (!gpsPickupActive || !liveCoords || !liveTracking) return;
+    setCustomFromCoords({ latitude: liveCoords.latitude, longitude: liveCoords.longitude });
+    setDirectFromText(
+      lang === "uz"
+        ? `Mening joylashuvim (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
+        : lang === "ru"
+          ? `Моё местоположение (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
+          : `My location (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
+    );
+  }, [gpsPickupActive, liveCoords?.latitude, liveCoords?.longitude, liveTracking, lang]);
 
   const applyParkingLot = (id: string) => {
     const lot = PARKING_LOTS.find((p) => p.id === id);
@@ -505,12 +565,113 @@ export default function App() {
     if (pinMode === "from") {
       setDirectFromText(name);
       setCustomFromCoords({ latitude: lat, longitude: lng });
+      setGpsPickupActive(false);
       setPinMode(null);
     } else if (pinMode === "to") {
       setDirectToText(name);
       setCustomToCoords({ latitude: lat, longitude: lng });
       setPinMode(null);
     }
+  };
+
+  const submitDirectBooking = async () => {
+    if (!directBookingService) return;
+
+    const fromLabel = directFromText.trim();
+    const toLabel = directToText.trim();
+    const isSingle = SINGLE_LOCATION_SERVICES.includes(directBookingService);
+
+    if (!fromLabel) {
+      const err =
+        lang === "uz"
+          ? "Qayerdan (A nuqta) manzilini kiriting yoki xaritadan tanlang!"
+          : lang === "ru"
+            ? "Укажите точку отправления (A) на карте или в поле!"
+            : "Enter pickup (point A) or select on the map!";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
+    if (!isSingle && !toLabel) {
+      const err =
+        lang === "uz"
+          ? "Qayerga (B nuqta) manzilini kiriting yoki xaritadan tanlang!"
+          : lang === "ru"
+            ? "Укажите пункт назначения (B) на карте или в поле!"
+            : "Enter destination (point B) or select on the map!";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
+    const fromCoordsResolved = await resolveLocationCoords(fromLabel, customFromCoords, liveCoords);
+    const toCoordsResolved = isSingle
+      ? null
+      : await resolveLocationCoords(toLabel, customToCoords, fromCoordsResolved ?? liveCoords);
+
+    if (!fromCoordsResolved) {
+      const err =
+        lang === "uz"
+          ? "Boshlang'ich manzil topilmadi. Xaritadan pin qo'ying, GPS tugmasini bosing yoki ro'yxatdan tanlang."
+          : lang === "ru"
+            ? "Не удалось определить точку A. Выберите на карте, GPS или из списка."
+            : "Could not locate pickup. Use map pin, GPS, or quick select.";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
+    if (!isSingle && !toCoordsResolved) {
+      const err =
+        lang === "uz"
+          ? "Manzil (B nuqta) topilmadi. Xaritadan pin qo'ying yoki ro'yxatdan tanlang."
+          : lang === "ru"
+            ? "Не удалось определить точку B. Выберите на карте или из списка."
+            : "Could not locate destination. Use map pin or quick select.";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
+    setCustomFromCoords(fromCoordsResolved);
+    if (toCoordsResolved) setCustomToCoords(toCoordsResolved);
+
+    const metrics = computeRouteMetrics(
+      fromCoordsResolved,
+      isSingle ? null : toCoordsResolved,
+      directBookingService,
+      {
+        vehicleMultiplier: DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle)?.priceMultiplier,
+        parcelAdd: PARCEL_TYPES.find((p) => p.id === selectedParcelType)?.priceAdd,
+        truckMultiplier: CARGO_TRUCKS.find((tr) => tr.id === selectedCargoTruck)?.priceMultiplier,
+        weightTon: parseFloat(cargoWeightTon) || 1.5,
+        truckCapacityTon: CARGO_TRUCKS.find((tr) => tr.id === selectedCargoTruck)?.capacityTon,
+        parkingHourly: PARKING_LOTS.find((p) => p.id === selectedParkingId)?.pricePerHour,
+        ev30Min: EV_STATIONS.find((s) => s.id === selectedEvStationId)?.pricePer30Min,
+      }
+    );
+
+    let price = metrics.price;
+    if (appliedCouponId) {
+      const coupon = activeCoupons.find((c) => c.id === appliedCouponId);
+      if (coupon) {
+        price = coupon.isFlat
+          ? Math.max(0, price - coupon.discount)
+          : Math.max(0, Math.floor((price * (100 - coupon.discount)) / 100));
+      }
+    }
+
+    setPendingBooking({
+      type: toBookingType(directBookingService),
+      from: fromLabel,
+      to: isSingle ? undefined : toLabel,
+      price,
+      title: getDirectBookingLabel(directBookingService, "en"),
+      subtitle: isSingle ? fromLabel : `${fromLabel} → ${toLabel}`,
+      fromCoords: fromCoordsResolved,
+      toCoords: toCoordsResolved ?? undefined,
+    });
   };
 
   // Quick prompt suggestions
@@ -601,13 +762,20 @@ export default function App() {
         });
 
         // Trigger dynamic interactive booking request
+        const fromText = params.from || "";
+        const toText = params.to || "";
+        const fromCoordsAi = lookupLocationByText(fromText);
+        const toCoordsAi = lookupLocationByText(toText);
+
         setPendingBooking({
           type: toBookingType(params.type || "taxi"),
-          from: params.from || "Chorsu",
-          to: params.to || "Magic City",
+          from: fromText || undefined,
+          to: toText || undefined,
           price: parseInt(params.price) || 28000,
           title: params.type === "cargo" ? "404-GO Cargo" : params.type === "parking" ? "Smart Parking" : params.type === "ev_charge" ? "EV Charging" : params.type === "delivery" ? "Courier" : "404-GO Taxi",
-          subtitle: params.type === "parking" || params.type === "ev_charge" ? (params.from || params.to || "Tashkent City") : `${params.from} → ${params.to}`,
+          subtitle: params.type === "parking" || params.type === "ev_charge" ? (fromText || toText || "Tashkent City") : `${fromText} → ${toText}`,
+          fromCoords: fromCoordsAi ?? undefined,
+          toCoords: toCoordsAi ?? undefined,
         });
       }
 
@@ -661,80 +829,58 @@ export default function App() {
   };
 
   // Confirm booking & create active order
-  const finalizeBooking = (paymentProvider: PaymentProvider = "card") => {
-    if (!pendingBooking) return;
-
-    // Find the active linked card
-    const activeCard = paymentCards.find(c => c.active);
+  const finalizeBooking = (
+    paymentProvider: PaymentProvider = "payme",
+    bookingOverride?: NonNullable<typeof pendingBooking>
+  ) => {
+    const booking = bookingOverride ?? pendingBooking;
+    if (!booking) return;
 
     let maxDeduct = 0;
-    let cardPayment = pendingBooking.price;
-
     if (useCashbackAsPayment) {
-      maxDeduct = Math.min(cashback, pendingBooking.price);
-      cardPayment = pendingBooking.price - maxDeduct;
+      maxDeduct = Math.min(cashback, booking.price);
     }
 
-    if (cardPayment > 0) {
-      if (!activeCard) {
-        const err = lang === "uz"
-          ? "Platformaga biriktirilgan faol karta topilmadi! Iltimos, hamyon bo'limida yangi karta biriktiring."
-          : lang === "ru"
-            ? "Не найдена активная привязанная карта! Пожалуйста, привяжите карту в разделе кошелька."
-            : "No active linked card found! Please link a card in the wallet section.";
-        alert(err);
-        speakText(err);
-        return;
-      }
+    const earnedCashback = Math.floor(booking.price * 0.1);
 
-      // Check balance of the linked card
-      if (balance < cardPayment) {
-        const err = lang === "uz"
-          ? `Biriktirilgan "${activeCard.name}" kartangizda yetarli mablag' mavjud emas (Karta qoldig'i: ${balance.toLocaleString()} so'm, To'lanishi kerak: ${cardPayment.toLocaleString()} so'm). Iltimos, boshqa karta tanlang.`
-          : lang === "ru"
-            ? `На привязанной карте "${activeCard.name}" недостаточно средств (Баланс карты: ${balance.toLocaleString()} сумов, К оплате: ${cardPayment.toLocaleString()} сумов). Пожалуйста, выберите другую карту.`
-            : `Insufficient funds on your linked "${activeCard.name}" card (Card balance: ${balance.toLocaleString()} UZS, Required: ${cardPayment.toLocaleString()} UZS). Please select another card.`;
-        alert(err);
-        speakText(err);
-        return;
-      }
-    }
-
-    // Deduct money from card (auto-debit) and cashback, then add earned cashback
-    const earnedCashback = Math.floor(pendingBooking.price * 0.1);
-    
-    if (useCashbackAsPayment) {
-      setCashback(prev => prev - maxDeduct + earnedCashback);
-      setBalance(prev => prev - cardPayment);
+    if (useCashbackAsPayment && maxDeduct > 0) {
+      setCashback((prev) => prev - maxDeduct + earnedCashback);
     } else {
-      setBalance(prev => prev - pendingBooking.price);
-      setCashback(prev => prev + earnedCashback);
+      setCashback((prev) => prev + earnedCashback);
     }
 
-    // Announce transaction details
+    const providerLabel =
+      paymentProvider === "payme"
+        ? "Payme"
+        : paymentProvider === "click"
+          ? "Click"
+          : paymentProvider === "uzum"
+            ? "Uzum Bank"
+            : paymentProvider;
+
     let debitMsg = "";
-    if (useCashbackAsPayment) {
-      if (cardPayment === 0) {
-        debitMsg = lang === "uz"
-          ? `To'lov to'liq kupon balansi (${maxDeduct.toLocaleString()} so'm) hisobidan amalga oshirildi!`
+    if (useCashbackAsPayment && maxDeduct >= booking.price) {
+      debitMsg =
+        lang === "uz"
+          ? `To'lov to'liq keshbek balansi (${maxDeduct.toLocaleString()} so'm) hisobidan amalga oshirildi!`
           : lang === "ru"
-            ? `Оплата полностью списана с баланса купонов (${maxDeduct.toLocaleString()} сумов)!`
-            : `Payment fully debited from your coupon balance (${maxDeduct.toLocaleString()} UZS)!`;
-      } else {
-        const activeCardNumber = activeCard ? (activeCard.number || "•••• 1234") : "•••• 1234";
-        debitMsg = lang === "uz"
-          ? `To'lov muvaffaqiyatli! ${maxDeduct.toLocaleString()} so'm kupon hisobidan va ${cardPayment.toLocaleString()} so'm ${activeCard.name} (${activeCardNumber}) kartangizdan avtomatik tarzda yechib olindi.`
+            ? `Оплата полностью списана с кешбека (${maxDeduct.toLocaleString()} сумов)!`
+            : `Payment fully debited from cashback (${maxDeduct.toLocaleString()} UZS)!`;
+    } else if (useCashbackAsPayment && maxDeduct > 0) {
+      const remainder = booking.price - maxDeduct;
+      debitMsg =
+        lang === "uz"
+          ? `${maxDeduct.toLocaleString()} so'm keshbek va ${remainder.toLocaleString()} so'm ${providerLabel} orqali to'landi!`
           : lang === "ru"
-            ? `Оплата успешна! ${maxDeduct.toLocaleString()} сумов списано с баланса купонов и ${cardPayment.toLocaleString()} сумов с карты ${activeCard.name} (${activeCardNumber}).`
-            : `Payment successful! ${maxDeduct.toLocaleString()} UZS debited from coupons and ${cardPayment.toLocaleString()} UZS from your ${activeCard.name} (${activeCardNumber}) card.`;
-      }
+            ? `${maxDeduct.toLocaleString()} сумов с кешбека и ${remainder.toLocaleString()} сумов через ${providerLabel}!`
+            : `${maxDeduct.toLocaleString()} UZS cashback + ${remainder.toLocaleString()} UZS via ${providerLabel}!`;
     } else {
-      const activeCardNumber = activeCard ? (activeCard.number || "•••• 1234") : "•••• 1234";
-      debitMsg = lang === "uz"
-        ? `To'lov biriktirilgan ${activeCard.name} (${activeCardNumber}) kartangizdan avtomatik tarzda yechib olindi!`
-        : lang === "ru"
-          ? `Оплата автоматически списана с вашей привязанной карты ${activeCard.name} (${activeCardNumber})!`
-          : `Payment automatically debited from your linked ${activeCard.name} (${activeCardNumber}) card!`;
+      debitMsg =
+        lang === "uz"
+          ? `${providerLabel} orqali ${booking.price.toLocaleString()} so'm to'landi!`
+          : lang === "ru"
+            ? `Оплата ${providerLabel}: ${booking.price.toLocaleString()} сумов!`
+            : `Paid ${booking.price.toLocaleString()} UZS via ${providerLabel}!`;
     }
 
     speakText(debitMsg);
@@ -748,19 +894,44 @@ export default function App() {
     // Reset payment option
     setUseCashbackAsPayment(false);
 
-    const isTaxi = pendingBooking.type === "taxi";
+    const isTaxi = booking.type === "taxi";
     const cargoTruck = CARGO_TRUCKS.find((t) => t.id === selectedCargoTruck);
     const deliveryVehicle = DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle);
     const parcel = PARCEL_TYPES.find((p) => p.id === selectedParcelType);
     const parkingLot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
     const evStation = EV_STATIONS.find((s) => s.id === selectedEvStationId);
 
-    const fromCoordsFinal = pendingBooking.fromCoords ?? customFromCoords ?? undefined;
-    const toCoordsFinal = pendingBooking.toCoords ?? customToCoords ?? undefined;
+    const fromCoordsFinal = booking.fromCoords;
+    const toCoordsFinal = booking.toCoords;
+
+    if (!fromCoordsFinal) {
+      const err =
+        lang === "uz"
+          ? "Buyurtma manzili aniqlanmadi. Qaytadan joylashuvni tanlang."
+          : lang === "ru"
+            ? "Адрес заказа не определён. Выберите местоположение заново."
+            : "Order location missing. Please select locations again.";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
+    if (!SINGLE_LOCATION_SERVICES.includes(booking.type) && !toCoordsFinal) {
+      const err =
+        lang === "uz"
+          ? "Manzil (B nuqta) aniqlanmadi. Qaytadan tanlang."
+          : lang === "ru"
+            ? "Пункт назначения не определён."
+            : "Destination not set.";
+      alert(err);
+      speakText(err);
+      return;
+    }
+
     const routeMetrics = computeRouteMetrics(
-      fromCoordsFinal ?? null,
-      SINGLE_LOCATION_SERVICES.includes(pendingBooking.type) ? null : toCoordsFinal ?? null,
-      pendingBooking.type,
+      fromCoordsFinal,
+      SINGLE_LOCATION_SERVICES.includes(booking.type) ? null : toCoordsFinal ?? null,
+      booking.type,
       {
         vehicleMultiplier: deliveryVehicle?.priceMultiplier,
         parcelAdd: parcel?.priceAdd,
@@ -778,10 +949,10 @@ export default function App() {
       { driverName: "Dina Ahmedova", carName: "Kia K5", carNumber: "01 B 123 AB", rating: 4.95, trips: 987 },
       { driverName: "Aleksey Smirnov", carName: "Tesla Model 3", carNumber: "01 M 888 MA", rating: 4.91, trips: 1432 },
     ];
-    const driverPick = ASSIGNED_DRIVERS[(pendingBooking.from?.length ?? 0) % ASSIGNED_DRIVERS.length];
+    const driverPick = ASSIGNED_DRIVERS[(booking.from?.length ?? 0) % ASSIGNED_DRIVERS.length];
 
     const serviceDriverInfo = (() => {
-      if (pendingBooking.type === "cargo" && cargoTruck) {
+      if (booking.type === "cargo" && cargoTruck) {
         return {
           driverName: "Yuk haydovchisi",
           carName: localizedName(cargoTruck, lang),
@@ -790,7 +961,7 @@ export default function App() {
           trips: 620,
         };
       }
-      if (pendingBooking.type === "delivery" && deliveryVehicle) {
+      if (booking.type === "delivery" && deliveryVehicle) {
         return {
           driverName: "Kuryer",
           carName: `${localizedName(deliveryVehicle, lang)} · ${parcel ? localizedName(parcel, lang) : "Pochta"}`,
@@ -799,7 +970,7 @@ export default function App() {
           trips: 1104,
         };
       }
-      if (pendingBooking.type === "parking" && parkingLot) {
+      if (booking.type === "parking" && parkingLot) {
         return {
           driverName: "Smart Parking",
           carName: localizedName(parkingLot, lang),
@@ -808,7 +979,7 @@ export default function App() {
           trips: 0,
         };
       }
-      if (pendingBooking.type === "ev_charge" && evStation) {
+      if (booking.type === "ev_charge" && evStation) {
         return {
           driverName: "EV Station",
           carName: localizedName(evStation, lang),
@@ -822,10 +993,10 @@ export default function App() {
 
     const statusForType = () => {
       if (isTaxi) return { uz: "Haydovchi qidirilmoqda", en: "Finding driver", ru: "Поиск водителя" };
-      if (pendingBooking.type === "cargo") return { uz: "Yuk mashinasi tayinlandi", en: "Cargo truck assigned", ru: "Грузовик назначен" };
-      if (pendingBooking.type === "delivery") return { uz: "Kuryer pochta olib ketmoqda", en: "Courier picking up mail", ru: "Курьер забирает посылку" };
-      if (pendingBooking.type === "parking") return { uz: "Parkovka band qilindi", en: "Parking spot reserved", ru: "Место забронировано" };
-      if (pendingBooking.type === "ev_charge") return { uz: "Zaryad stansiyasi tayyor", en: "Charging station ready", ru: "Станция готова" };
+      if (booking.type === "cargo") return { uz: "Yuk mashinasi tayinlandi", en: "Cargo truck assigned", ru: "Грузовик назначен" };
+      if (booking.type === "delivery") return { uz: "Kuryer pochta olib ketmoqda", en: "Courier picking up mail", ru: "Курьер забирает посылку" };
+      if (booking.type === "parking") return { uz: "Parkovka band qilindi", en: "Parking spot reserved", ru: "Место забронировано" };
+      if (booking.type === "ev_charge") return { uz: "Zaryad stansiyasi tayyor", en: "Charging station ready", ru: "Станция готова" };
       return { uz: "Bajarilmoqda", en: "In progress", ru: "Выполняется" };
     };
 
@@ -839,14 +1010,14 @@ export default function App() {
     const newOrder: Booking = {
       id: pendingServerOrderRef.current || pendingServerOrderId || `order-${Date.now()}`,
       serverOrderId: pendingServerOrderRef.current || pendingServerOrderId || undefined,
-      type: pendingBooking.type,
-      title: getOrderTitle(pendingBooking.type),
+      type: booking.type,
+      title: getOrderTitle(booking.type),
       subtitle: {
-        uz: pendingBooking.subtitle,
-        en: pendingBooking.subtitle,
-        ru: pendingBooking.subtitle,
+        uz: booking.subtitle,
+        en: booking.subtitle,
+        ru: booking.subtitle,
       },
-      price: pendingBooking.price,
+      price: booking.price,
       tripDistanceKm: routeMetrics.distanceKm,
       tripDurationMin: routeMetrics.durationMin,
       date: isScheduled
@@ -854,8 +1025,8 @@ export default function App() {
         : "Hozirgina",
       status: isScheduled ? "scheduled" : "active",
       statusText: isScheduled ? scheduledStatus : statusForType(),
-      from: pendingBooking.from,
-      to: pendingBooking.to,
+      from: booking.from,
+      to: booking.to,
       fromCoords: fromCoordsFinal,
       toCoords: toCoordsFinal,
       scheduledAt: isScheduled ? scheduledDateTime : undefined,
@@ -875,15 +1046,15 @@ export default function App() {
               carNumber: serviceDriverInfo.carNumber,
               rating: serviceDriverInfo.rating ?? 4.9,
               duration:
-                pendingBooking.type === "parking" || pendingBooking.type === "ev_charge"
+                booking.type === "parking" || booking.type === "ev_charge"
                   ? formatDuration(60, lang)
                   : formatDuration(routeMetrics.durationMin, lang),
               distance:
-                pendingBooking.type === "parking" || pendingBooking.type === "ev_charge"
+                booking.type === "parking" || booking.type === "ev_charge"
                   ? "—"
                   : formatDistance(routeMetrics.distanceKm, lang),
               driverDistanceKm:
-                pendingBooking.type === "delivery" || pendingBooking.type === "cargo"
+                booking.type === "delivery" || booking.type === "cargo"
                   ? Math.round(routeMetrics.distanceKm * 0.12 * 100) / 100
                   : undefined,
             }
@@ -897,6 +1068,7 @@ export default function App() {
     pendingServerOrderRef.current = null;
     setDirectBookingService(null);
     setPinMode(null);
+    setGpsPickupActive(false);
     setScheduledDateTime("");
     setSelectedPaymentProvider(paymentProvider);
     setActiveTab("orders");
@@ -912,9 +1084,9 @@ export default function App() {
         ru: isScheduled ? "Заказ запланирован" : "Заказ принят",
       },
       body: {
-        uz: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} so'm`,
-        en: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} UZS`,
-        ru: `${pendingBooking.from || ""} ${pendingBooking.to ? "→ " + pendingBooking.to : ""} · ${pendingBooking.price.toLocaleString()} сум`,
+        uz: `${booking.from || ""} ${booking.to ? "→ " + booking.to : ""} · ${booking.price.toLocaleString()} so'm`,
+        en: `${booking.from || ""} ${booking.to ? "→ " + booking.to : ""} · ${booking.price.toLocaleString()} UZS`,
+        ru: `${booking.from || ""} ${booking.to ? "→ " + booking.to : ""} · ${booking.price.toLocaleString()} сум`,
       },
     });
 
@@ -922,9 +1094,9 @@ export default function App() {
       type: "payment",
       title: { uz: "To'lov o'tdi", en: "Payment successful", ru: "Оплата прошла" },
       body: {
-        uz: `${paymentProvider.toUpperCase()} orqali ${pendingBooking.price.toLocaleString()} so'm yechildi`,
-        en: `${pendingBooking.price.toLocaleString()} UZS paid via ${paymentProvider}`,
-        ru: `Списано ${pendingBooking.price.toLocaleString()} сум через ${paymentProvider}`,
+        uz: `${paymentProvider.toUpperCase()} orqali ${booking.price.toLocaleString()} so'm yechildi`,
+        en: `${booking.price.toLocaleString()} UZS paid via ${paymentProvider}`,
+        ru: `Списано ${booking.price.toLocaleString()} сум через ${paymentProvider}`,
       },
     });
 
@@ -948,25 +1120,67 @@ export default function App() {
     speakText(welcomeMsg);
   };
 
-  const handleConfirmBooking = () => {
+  const handleConfirmBooking = async () => {
     if (!pendingBooking) return;
     if (!authSession) {
       setShowAuthModal(true);
       return;
     }
 
-    // To'lov oynasini darhol ochish — backend kutmasdan
-    openPayment(pendingBooking.price, "booking", (provider) => finalizeBooking(provider));
+    let fromCoords = pendingBooking.fromCoords;
+    let toCoords = pendingBooking.toCoords;
+
+    if (!fromCoords && pendingBooking.from) {
+      fromCoords = (await resolveLocationCoords(pendingBooking.from, null, liveCoords)) ?? undefined;
+    }
+    if (!toCoords && pendingBooking.to) {
+      toCoords = (await resolveLocationCoords(pendingBooking.to, null, fromCoords ?? liveCoords)) ?? undefined;
+    }
+
+    if (!fromCoords) {
+      const err =
+        lang === "uz"
+          ? "Boshlang'ich manzil aniqlanmadi. Buyurtmani qayta yarating."
+          : lang === "ru"
+            ? "Точка отправления не определена."
+            : "Pickup location could not be resolved.";
+      alert(err);
+      return;
+    }
+
+    if (!SINGLE_LOCATION_SERVICES.includes(pendingBooking.type) && !toCoords) {
+      const err =
+        lang === "uz"
+          ? "Manzil (B nuqta) aniqlanmadi. Buyurtmani qayta yarating."
+          : lang === "ru"
+            ? "Пункт назначения не определён."
+            : "Destination could not be resolved.";
+      alert(err);
+      return;
+    }
+
+    const bookingSnapshot = {
+      ...pendingBooking,
+      fromCoords,
+      toCoords,
+    };
+    setPendingBooking(bookingSnapshot);
+
+    openPayment(bookingSnapshot.price, "booking", (provider) => finalizeBooking(provider, bookingSnapshot));
 
     createPlatformOrder({
-      type: pendingBooking.type,
+      type: bookingSnapshot.type,
       customerPhone: userProfile.phone || authSession.phone,
       customerName: [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") || undefined,
-      from: pendingBooking.from || "",
-      to: pendingBooking.to,
-      fromCoords: customFromCoords ?? pendingBooking.fromCoords ?? undefined,
-      toCoords: customToCoords ?? pendingBooking.toCoords ?? undefined,
-      price: pendingBooking.price,
+      from: bookingSnapshot.from || "",
+      to: bookingSnapshot.to,
+      fromCoords: bookingSnapshot.fromCoords,
+      toCoords: bookingSnapshot.toCoords,
+      price: bookingSnapshot.price,
+      tripDistanceKm:
+        bookingSnapshot.fromCoords && bookingSnapshot.toCoords
+          ? computeRouteMetrics(bookingSnapshot.fromCoords, bookingSnapshot.toCoords, bookingSnapshot.type).distanceKm
+          : undefined,
     })
       .then((backendOrder) => {
         pendingServerOrderRef.current = backendOrder.id;
@@ -1424,132 +1638,31 @@ export default function App() {
     return price;
   };
 
-  // Send transfer from active card
+  // Send transfer from wallet balance
   const handleTransfer = (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseInt(transferAmount);
     if (isNaN(amount) || amount <= 0 || !transferPhone) return;
 
-    const activeCard = paymentCards.find(c => c.active);
-    if (!activeCard) return;
-
     if (balance < amount) {
-      alert(lang === "uz" ? "Kartangizda yetarli mablag' mavjud emas!" : "Insufficient balance on card!");
+      alert(lang === "uz" ? "Hamyon balansida yetarli mablag' mavjud emas!" : lang === "ru" ? "Недостаточно средств на балансе!" : "Insufficient wallet balance!");
       return;
     }
 
-    setBalance(prev => prev - amount);
+    setBalance((prev) => prev - amount);
     setTransferSuccess(true);
     setTransferAmount("");
     setTransferPhone("");
 
-    const activeCardNumber = activeCard.number || "•••• 1234";
-    const transferMsg = lang === "uz"
-      ? `O'tkazma muvaffaqiyatli bajarildi! ${amount.toLocaleString()} so'm ${activeCard.name} (${activeCardNumber}) kartangizdan yuborildi.`
-      : lang === "ru"
-        ? `Перевод успешно выполнен! ${amount.toLocaleString()} сумов отправлено с вашей карты ${activeCard.name} (${activeCardNumber}).`
-        : `Transfer successfully completed! ${amount.toLocaleString()} UZS sent from your ${activeCard.name} (${activeCardNumber}) card.`;
+    const transferMsg =
+      lang === "uz"
+        ? `O'tkazma muvaffaqiyatli! ${amount.toLocaleString()} so'm ${transferPhone} raqamiga yuborildi.`
+        : lang === "ru"
+          ? `Перевод выполнен! ${amount.toLocaleString()} сумов отправлено на ${transferPhone}.`
+          : `Transfer completed! ${amount.toLocaleString()} UZS sent to ${transferPhone}.`;
     speakText(transferMsg);
 
     setTimeout(() => setTransferSuccess(false), 3000);
-  };
-
-  // Add customized bank card
-  const handleAddCard = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCardNumber.trim() || !newCardExpiry.trim() || !newCardCvv.trim()) {
-      const err = lang === "uz" 
-        ? "Iltimos, barcha maydonlarni to'ldiring!" 
-        : "Please fill in all fields!";
-      alert(err);
-      return;
-    }
-
-    if (newCardCvv.length !== 3) {
-      const err = lang === "uz" 
-        ? "CVV/CVC kodi 3 ta raqamdan iborat bo'lishi kerak!" 
-        : "CVV/CVC code must be exactly 3 digits!";
-      alert(err);
-      return;
-    }
-
-    const rawNum = newCardNumber.replace(/\s+/g, '');
-    if (rawNum.length < 16) {
-      const err = lang === "uz" 
-        ? "Karta raqami kamida 16 ta raqam bo'lishi kerak!" 
-        : "Card number must be at least 16 digits!";
-      alert(err);
-      return;
-    }
-
-    const last4 = rawNum.slice(-4) || "0000";
-    const masked = `${rawNum.slice(0, 4)} •••• •••• ${last4}`;
-    const startBal = parseInt(newCardStartBalance) || 500000;
-
-    const newCard = {
-      id: `card-${Date.now()}`,
-      name: `${newCardType}`,
-      logo: newCardType.toUpperCase(),
-      number: masked,
-      expiry: newCardExpiry || "12/29",
-      cvv: newCardCvv,
-      balance: startBal,
-      active: false
-    };
-
-    setPaymentCards(prev => [...prev, newCard]);
-    
-    setNewCardNumber("");
-    setNewCardExpiry("");
-    setNewCardCvv("");
-    setNewCardStartBalance("500000");
-    setShowAddCard(false);
-
-    const msg = lang === "uz"
-      ? `${newCardType} (${masked}) kartangiz muvaffaqiyatli biriktirildi!`
-      : lang === "ru"
-        ? `Ваша карта ${newCardType} (${masked}) успешно привязана!`
-        : `${newCardType} (${masked}) card successfully linked!`;
-    
-    alert(msg);
-    speakText(msg);
-  };
-
-  // Select active linked card
-  const handleSelectCard = (id: string) => {
-    let selectedCardName = "";
-    let selectedCardNumber = "";
-
-    setPaymentCards(prev => {
-      // 1. Save current "balance" back to the currently active card
-      const withUpdatedBalance = prev.map(c => {
-        if (c.active) {
-          return { ...c, balance: balance };
-        }
-        return c;
-      });
-
-      // 2. Activate the selected card and set its balance
-      return withUpdatedBalance.map(c => {
-        if (c.id === id) {
-          setBalance(c.balance || 0);
-          selectedCardName = c.name;
-          selectedCardNumber = c.number;
-          return { ...c, active: true };
-        } else {
-          return { ...c, active: false };
-        }
-      });
-    });
-
-    if (selectedCardName) {
-      const selectMsg = lang === "uz"
-        ? `Tizim ${selectedCardName} (${selectedCardNumber}) kartasiga biriktirildi. To'lovlar shu kartadan avtomatik yechiladi!`
-        : lang === "ru"
-          ? `Система привязана к карте ${selectedCardName} (${selectedCardNumber}). Оплата будет списываться автоматически!`
-          : `System linked to ${selectedCardName} (${selectedCardNumber}) card. Payments will be auto-debited!`;
-      speakText(selectMsg);
-    }
   };
 
   // Route calculation simulator
@@ -2452,6 +2565,8 @@ export default function App() {
                             <SmartMap
                               compact
                               pinMode={pinMode}
+                              liveUserCoords={liveCoords}
+                              liveTracking={liveTracking}
                               serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
                               selectedServicePointId={
                                 directBookingService === "parking"
@@ -2504,8 +2619,10 @@ export default function App() {
                                 type="text"
                                 value={directFromText}
                                 onChange={(e) => {
-                                  setDirectFromText(e.target.value);
-                                  setCustomFromCoords(null);
+                                  const val = e.target.value;
+                                  setDirectFromText(val);
+                                  setGpsPickupActive(false);
+                                  setCustomFromCoords(lookupLocationByText(val));
                                 }}
                                 className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
                                 placeholder={lang === "uz" ? "Masalan: Chorsu bozori" : lang === "ru" ? "Например: Базар Чорсу" : "e.g., Chorsu Bazaar"}
@@ -2525,25 +2642,15 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (!navigator.geolocation) return;
-                                    navigator.geolocation.getCurrentPosition(
-                                      (pos) => {
-                                        const { latitude, longitude } = pos.coords;
-                                        setCustomFromCoords({ latitude, longitude });
-                                        setDirectFromText(
-                                          lang === "uz"
-                                            ? `Mening joylashuvim (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`
-                                            : lang === "ru"
-                                              ? `Моё местоположение (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`
-                                              : `My location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`
-                                        );
-                                      },
-                                      () => {},
-                                      { enableHighAccuracy: true, timeout: 8000 }
-                                    );
+                                    setGpsPickupActive(true);
+                                    startTracking();
                                   }}
-                                  className="p-2 rounded-lg border bg-slate-900 text-teal-400 border-slate-800 hover:border-teal-400/40 transition"
-                                  title={lang === "uz" ? "GPS — hozirgi joy" : lang === "ru" ? "GPS — текущее место" : "GPS — current location"}
+                                  className={`p-2 rounded-lg border transition ${
+                                    liveTracking
+                                      ? "bg-teal-400/20 text-teal-400 border-teal-400/50"
+                                      : "bg-slate-900 text-teal-400 border-slate-800 hover:border-teal-400/40"
+                                  }`}
+                                  title={lang === "uz" ? "GPS — jonli joylashuv" : lang === "ru" ? "GPS — текущее место" : "GPS — live location"}
                                 >
                                   <Navigation className="w-3.5 h-3.5" />
                                 </button>
@@ -2562,8 +2669,9 @@ export default function App() {
                                   type="text"
                                   value={directToText}
                                   onChange={(e) => {
-                                    setDirectToText(e.target.value);
-                                    setCustomToCoords(null);
+                                    const val = e.target.value;
+                                    setDirectToText(val);
+                                    setCustomToCoords(lookupLocationByText(val));
                                   }}
                                   className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
                                   placeholder={lang === "uz" ? "Masalan: Magic City bog'i" : lang === "ru" ? "Например: Парк Magic City" : "e.g., Magic City Park"}
@@ -2596,6 +2704,7 @@ export default function App() {
                                     key={loc.id}
                                     type="button"
                                     onClick={() => {
+                                      setGpsPickupActive(false);
                                       if (pinMode === "to" || (!pinMode && directFromText && !directToText)) {
                                         setDirectToText(locName);
                                         setCustomToCoords({ latitude: loc.lat, longitude: loc.lng });
@@ -2613,29 +2722,6 @@ export default function App() {
                             </div>
                             </div>
                           )}
-
-                          {/* Payment Card Selector */}
-                          <div className="space-y-1 pt-1">
-                            <label className="text-[10px] text-gray-400 font-medium">
-                              {lang === "uz" ? "To'lov kartasi:" : lang === "ru" ? "Карта оплаты:" : "Payment Card:"}
-                            </label>
-                            <div className="grid grid-cols-4 gap-1.5">
-                              {paymentCards.map((c) => (
-                                <button
-                                  key={c.id}
-                                  type="button"
-                                  onClick={() => handleSelectCard(c.id)}
-                                  className={`py-1 px-1 rounded-lg text-[9px] font-bold border transition truncate ${
-                                    c.active 
-                                      ? "bg-teal-400/10 text-teal-400 border-teal-400/50" 
-                                      : "bg-slate-900 text-gray-400 border-slate-850 hover:border-slate-800"
-                                  }`}
-                                >
-                                  {c.logo}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
 
                           {/* Coupon Selector */}
                           {activeCoupons.length > 0 && (
@@ -2696,29 +2782,31 @@ export default function App() {
                             <span className="text-gray-400 font-medium">
                               {lang === "uz" ? "Aniq narx (GPS):" : lang === "ru" ? "Точная цена (GPS):" : "Exact price (GPS):"}
                             </span>
-                            <span className="font-mono font-bold text-teal-400">
-                              {getCalculatedPrice().toLocaleString()} so'm
-                            </span>
+                            {!SINGLE_LOCATION_SERVICES.includes(directBookingService) &&
+                            (!customFromCoords || !customToCoords) ? (
+                              <span className="text-[10px] text-amber-400 font-medium">
+                                {lang === "uz"
+                                  ? "A va B nuqtalarni tanlang"
+                                  : lang === "ru"
+                                    ? "Выберите A и B"
+                                    : "Select A and B points"}
+                              </span>
+                            ) : (
+                              <span className="font-mono font-bold text-teal-400">
+                                {getCalculatedPrice().toLocaleString()} so'm
+                              </span>
+                            )}
                           </div>
 
                           {/* Actions */}
                           <div className="flex gap-2 pt-1">
                             <button
-                              onClick={() => {
-                                setPendingBooking({
-                                  type: toBookingType(directBookingService),
-                                  from: directFromText,
-                                  to: SINGLE_LOCATION_SERVICES.includes(directBookingService) ? undefined : directToText,
-                                  price: getCalculatedPrice(),
-                                  title: getDirectBookingLabel(directBookingService, "en"),
-                                  subtitle: SINGLE_LOCATION_SERVICES.includes(directBookingService)
-                                    ? directFromText
-                                    : `${directFromText} → ${directToText}`,
-                                  fromCoords: customFromCoords ?? undefined,
-                                  toCoords: customToCoords ?? undefined,
-                                });
-                              }}
-                              className="flex-grow nexgo-btn-primary text-xs py-2.5 active:scale-[0.98]"
+                              onClick={() => void submitDirectBooking()}
+                              disabled={
+                                !directFromText.trim() ||
+                                (!SINGLE_LOCATION_SERVICES.includes(directBookingService) && !directToText.trim())
+                              }
+                              className="flex-grow nexgo-btn-primary text-xs py-2.5 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               {lang === "uz" ? "Buyurtma berish" : lang === "ru" ? "Заказать сейчас" : "Order Now"}
                             </button>
@@ -2726,6 +2814,7 @@ export default function App() {
                               onClick={() => {
                                 setDirectBookingService(null);
                                 setPinMode(null);
+                                setGpsPickupActive(false);
                               }}
                               className="bg-slate-900 hover:bg-slate-850 text-gray-400 hover:text-white font-semibold text-xs py-2.5 px-3 rounded-xl border border-slate-800 transition"
                             >
@@ -2750,10 +2839,14 @@ export default function App() {
                               readOnly
                               onClick={() => {
                                 setDirectBookingService("taxi");
-                                setDirectFromText(lang === "uz" ? "Chorsu bozori" : lang === "ru" ? "Базар Чорсу" : "Chorsu Bazaar");
-                                setDirectToText(lang === "uz" ? "Magic City bog'i" : lang === "ru" ? "Парк Magic City" : "Magic City Park");
-                                setCustomFromCoords({ latitude: 41.3216, longitude: 69.2285 });
-                                setCustomToCoords({ latitude: 41.3031, longitude: 69.2486 });
+                                openDirectBookingDefaults("taxi", {
+                                  setDirectFromText,
+                                  setDirectToText,
+                                  setCustomFromCoords,
+                                  setCustomToCoords,
+                                  setGpsPickupActive,
+                                  setPinMode,
+                                });
                               }}
                             />
                             
@@ -2805,10 +2898,14 @@ export default function App() {
                                         applyEvStation(EV_STATIONS[0].id);
                                       }
                                     } else {
-                                      setDirectFromText(lang === "uz" ? "Chorsu bozori" : lang === "ru" ? "Базар Чорсу" : "Chorsu Bazaar");
-                                      setDirectToText(lang === "uz" ? "Magic City bog'i" : lang === "ru" ? "Парк Magic City" : "Magic City Park");
-                                      setCustomFromCoords({ latitude: 41.3216, longitude: 69.2285 });
-                                      setCustomToCoords({ latitude: 41.3031, longitude: 69.2486 });
+                                      openDirectBookingDefaults(cat.id, {
+                                        setDirectFromText,
+                                        setDirectToText,
+                                        setCustomFromCoords,
+                                        setCustomToCoords,
+                                        setGpsPickupActive,
+                                        setPinMode,
+                                      });
                                       if (cat.id === "cargo") setSelectedCargoTruck(CARGO_TRUCKS[0].id);
                                       if (cat.id === "delivery") setSelectedDeliveryVehicle(DELIVERY_VEHICLES[1].id);
                                     }
@@ -3025,6 +3122,7 @@ export default function App() {
                                 userProfile={userProfile}
                                 lang={lang}
                                 t={t}
+                                liveUserCoords={liveCoords}
                                 onUpdateOrder={handleUpdateOrder}
                                 onCancel={handleCancelOrder}
                               />
@@ -3330,7 +3428,7 @@ export default function App() {
                           <div>
                             <p className="text-[8px] text-teal-400 uppercase tracking-widest font-mono font-bold flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse"></span>
-                              {lang === "uz" ? "AVTOMATIK TO'LOV TIZIMI FAOL" : lang === "ru" ? "АВТОПЛАТЕЖ АКТИВЕН" : "AUTO-PAYMENT SYSTEM ACTIVE"}
+                              {lang === "uz" ? "404-GO HAMYON" : lang === "ru" ? "404-GO КОШЕЛЁК" : "404-GO WALLET"}
                             </p>
                             <div className="flex items-baseline gap-1 mt-1">
                               <span className="text-xl font-mono font-black text-white">
@@ -3339,11 +3437,12 @@ export default function App() {
                               <span className="text-[10px] text-teal-400 font-medium font-mono">so'm</span>
                             </div>
                             <p className="text-[9px] text-gray-500 mt-1 flex items-center gap-1 leading-none">
-                              <span>💳</span>
                               <span>
-                                {lang === "uz" 
-                                  ? "To'lovlar tanlangan kartadan avtomatik tarzda yechib olinadi" 
-                                  : "Payments are auto-debited from the selected card"}
+                                {lang === "uz"
+                                  ? "To'lovlar Payme, Click yoki Uzum orqali amalga oshiriladi"
+                                  : lang === "ru"
+                                    ? "Оплата через Payme, Click или Uzum"
+                                    : "Pay via Payme, Click, or Uzum"}
                               </span>
                             </p>
                           </div>
@@ -3351,167 +3450,25 @@ export default function App() {
                             onClick={() => setShowTopUpModal(true)}
                             className="bg-teal-400 hover:bg-teal-300 text-slate-950 font-black text-[9px] uppercase tracking-wider px-3 py-1.5 rounded-lg transition shrink-0 active:scale-95"
                           >
-                            + {lang === "uz" ? "Karta balansi" : lang === "ru" ? "Пополнить карту" : "Add Card Funds"}
+                            + {lang === "uz" ? "Balans to'ldirish" : lang === "ru" ? "Пополнить" : "Top up"}
                           </button>
                         </div>
 
-                        <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 space-y-2">
-                          <p className="text-[9px] font-mono text-teal-400 uppercase tracking-widest leading-none mb-1 text-left">
-                            {lang === "uz" ? "Biriktirilgan bank kartalari" : lang === "ru" ? "Привязанные банковские карты" : "Linked Bank Cards"}
-                          </p>
-                          <div className="space-y-1.5">
-                            {paymentCards.map((card) => (
-                              <div
-                                key={card.id}
-                                onClick={() => handleSelectCard(card.id)}
-                                className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition ${
-                                  card.active ? "bg-teal-400/5 border-teal-400/50" : "bg-slate-950 border-slate-900 hover:border-slate-800"
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <div className="w-9 h-6 rounded bg-slate-900 border border-slate-800 flex flex-col items-center justify-center text-[7px] font-bold text-teal-400 font-mono">
-                                    {card.logo}
-                                  </div>
-                                  <div className="text-left leading-tight">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[10px] font-bold text-gray-200">{card.name}</span>
-                                      {card.active && (
-                                        <span className="bg-teal-400/10 text-teal-400 border border-teal-500/20 text-[6.5px] px-1 py-0.2 rounded-full uppercase tracking-wider font-mono scale-90">
-                                          {lang === "uz" ? "Avto-to'lov" : lang === "ru" ? "Автооплата" : "Auto-pay"}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <p className="text-[9px] text-gray-400 font-mono mt-0.5">
-                                      {card.number} <span className="text-gray-600 ml-1">exp: {card.expiry}</span>
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="text-right flex items-center gap-2">
-                                  <div className="text-right leading-none">
-                                    <span className="text-[8px] text-gray-500 font-mono block uppercase">{lang === "uz" ? "Karta qoldig'i" : lang === "ru" ? "Баланс" : "Card Balance"}</span>
-                                    <span className="text-[10px] font-mono font-bold text-gray-300">{(card.balance || 0).toLocaleString()} UZS</span>
-                                  </div>
-                                  <span className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
-                                    card.active ? "border-teal-400 bg-teal-400/20" : "border-slate-800"
-                                  }`}>
-                                    {card.active && <span className="w-2 h-2 rounded-full bg-teal-400" />}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Add new card simulator form */}
-                        {showAddCard ? (
-                          <form onSubmit={handleAddCard} className="bg-slate-950 p-3.5 rounded-xl border border-slate-850 space-y-3 text-left">
-                            <p className="text-[9px] font-mono text-teal-400 uppercase tracking-widest leading-none">
-                              {lang === "uz" ? "Yangi Karta Biriktirish" : lang === "ru" ? "Привязать новую карту" : "Link New Card"}
+                        <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 flex items-center justify-between">
+                          <div>
+                            <p className="text-[9px] font-mono text-emerald-400 uppercase tracking-widest leading-none">
+                              {lang === "uz" ? "Keshbek balansi" : lang === "ru" ? "Кешбек" : "Cashback"}
                             </p>
-                            
-                            <div className="grid grid-cols-3 gap-2">
-                              <div>
-                                <label className="text-[8px] text-gray-400 uppercase font-mono block mb-1">{lang === "uz" ? "Karta turi" : "Card Type"}</label>
-                                <select
-                                  value={newCardType}
-                                  onChange={(e) => setNewCardType(e.target.value as any)}
-                                  className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 focus:outline-none focus:border-teal-400"
-                                >
-                                  <option value="Uzcard">Uzcard</option>
-                                  <option value="Humo">Humo</option>
-                                  <option value="Visa">Visa</option>
-                                  <option value="Mastercard">Mastercard</option>
-                                </select>
-                              </div>
-                              <div>
-                                <label className="text-[8px] text-gray-400 uppercase font-mono block mb-1">{lang === "uz" ? "Muddati (MM/YY)" : "Expiry (MM/YY)"}</label>
-                                <input
-                                  type="text"
-                                  placeholder="12/29"
-                                  value={newCardExpiry}
-                                  onChange={(e) => {
-                                    let val = e.target.value.replace(/\D/g, '');
-                                    if (val.length > 2) {
-                                      val = val.slice(0, 2) + '/' + val.slice(2, 4);
-                                    }
-                                    setNewCardExpiry(val.slice(0, 5));
-                                  }}
-                                  className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 focus:outline-none focus:border-teal-400 font-mono"
-                                  required
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[8px] text-gray-400 uppercase font-mono block mb-1">{lang === "uz" ? "CVV/CVC kodi" : "CVV/CVC"}</label>
-                                <input
-                                  type="password"
-                                  maxLength={3}
-                                  placeholder="•••"
-                                  value={newCardCvv}
-                                  onChange={(e) => setNewCardCvv(e.target.value.replace(/\D/g, '').slice(0, 3))}
-                                  className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 focus:outline-none focus:border-teal-400 font-mono text-center font-bold tracking-widest"
-                                  required
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="text-[8px] text-gray-400 uppercase font-mono block mb-1">{lang === "uz" ? "Karta raqami" : "Card Number"}</label>
-                              <input
-                                type="text"
-                                placeholder="8600 0000 0000 0000"
-                                value={newCardNumber}
-                                onChange={(e) => {
-                                  const val = e.target.value.replace(/\s+/g, '').replace(/(\d{4})/g, '$1 ').trim();
-                                  setNewCardNumber(val.slice(0, 19));
-                                }}
-                                className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 focus:outline-none focus:border-teal-400 font-mono"
-                                required
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[8px] text-gray-400 uppercase font-mono block mb-1">
-                                {lang === "uz" ? "Karta balansi (Simulyatsiya uchun)" : "Simulated Card Balance"}
-                              </label>
-                              <input
-                                type="number"
-                                placeholder="500000"
-                                value={newCardStartBalance}
-                                onChange={(e) => setNewCardStartBalance(e.target.value)}
-                                className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 focus:outline-none focus:border-teal-400 font-mono"
-                                required
-                              />
-                              <span className="text-[7.5px] text-gray-500 block mt-1 leading-normal">
-                                {lang === "uz" 
-                                  ? "Mijozlar platformaga pul o'tkazmaydilar, to'lovlar shu kartadan avtomatik tarzda yechiladi." 
-                                  : "Customers do not deposit money to platform, payments are auto-debited directly from this card."}
-                              </span>
-                            </div>
-
-                            <div className="flex gap-2 pt-1">
-                              <button
-                                type="submit"
-                                className="bg-teal-400 hover:bg-teal-300 text-slate-950 text-[9px] font-black uppercase tracking-wider py-1.5 px-4 rounded-lg transition"
-                              >
-                                {lang === "uz" ? "Biriktirish" : lang === "ru" ? "Привязать" : "Link"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setShowAddCard(false)}
-                                className="text-gray-400 hover:text-white text-[9px] py-1.5 px-3 rounded-lg border border-slate-850 hover:border-slate-800 transition"
-                              >
-                                {lang === "uz" ? "Bekor qilish" : "Cancel"}
-                              </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <button
-                            onClick={() => setShowAddCard(true)}
-                            className="w-full py-2.5 bg-slate-950 hover:bg-slate-900 text-teal-400 hover:text-teal-300 text-[10px] border border-dashed border-teal-500/20 hover:border-teal-500/40 rounded-xl transition font-black uppercase tracking-wider"
-                          >
-                            + {lang === "uz" ? "Yangi karta biriktirish" : lang === "ru" ? "Привязать новую карту" : "Link New Card"}
-                          </button>
-                        )}
+                            <p className="text-sm font-mono font-bold text-emerald-400 mt-1">+{cashback.toLocaleString()} so'm</p>
+                          </div>
+                          <p className="text-[8px] text-gray-500 max-w-[120px] text-right leading-tight">
+                            {lang === "uz"
+                              ? "Sayohatlardan 10% keshbek"
+                              : lang === "ru"
+                                ? "10% кешбек за поездки"
+                                : "10% cashback on rides"}
+                          </p>
+                        </div>
 
                       {/* Loyalty Points Tracker */}
                       <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3.5 relative overflow-hidden">
@@ -4317,7 +4274,7 @@ export default function App() {
                             <span className="font-mono text-amber-400 font-bold">-{Math.min(cashback, pendingBooking.price).toLocaleString()} so'm</span>
                           </div>
                           <div className="flex justify-between text-gray-400">
-                            <span>{lang === "uz" ? "Kartadan yechiladi:" : lang === "ru" ? "Спишется с карты:" : "Remaining from Card:"}</span>
+                            <span>{lang === "uz" ? "Payme/Click/Uzum orqali:" : lang === "ru" ? "Через Payme/Click/Uzum:" : "Via Payme/Click/Uzum:"}</span>
                             <span className="font-mono text-teal-400 font-bold">{(pendingBooking.price - Math.min(cashback, pendingBooking.price)).toLocaleString()} so'm</span>
                           </div>
                         </div>
@@ -4512,6 +4469,16 @@ export default function App() {
             <div className="w-full h-[220px] overflow-hidden isolate z-0 rounded-xl">
               <SmartMap
                 compact={false}
+                liveUserCoords={liveCoords}
+                liveTracking={liveTracking}
+                driverCoords={selectedOrder?.driverCoords ?? null}
+                etaMinutes={
+                  selectedOrder?.status === "active" &&
+                  selectedOrder?.type === "taxi" &&
+                  (selectedOrder.ridePhase === "accepted" || selectedOrder.ridePhase === "arriving" || selectedOrder.ridePhase === "in_ride")
+                    ? (selectedOrder.etaMinutes ?? null)
+                    : null
+                }
                 activeFrom={
                   viewingHistoricalTrip
                     ? (viewingHistoricalTrip.from || "Chorsu")

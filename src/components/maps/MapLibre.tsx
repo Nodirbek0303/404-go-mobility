@@ -31,8 +31,11 @@ interface MapLibreProps {
   customFromCoords?: { latitude: number; longitude: number } | null;
   customToCoords?: { latitude: number; longitude: number } | null;
   driverCoords?: { latitude: number; longitude: number } | null;
+  liveUserCoords?: { latitude: number; longitude: number } | null;
+  etaMinutes?: number | null;
   onFailed?: () => void;
   className?: string;
+  lang?: string;
 }
 
 export default function MapLibre({
@@ -44,8 +47,11 @@ export default function MapLibre({
   customFromCoords,
   customToCoords,
   driverCoords,
+  liveUserCoords,
+  etaMinutes,
   onFailed,
   className = "",
+  lang = "uz",
 }: MapLibreProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -120,6 +126,9 @@ export default function MapLibre({
         if (driverCoords) {
           addMarker(driverCoords.longitude, driverCoords.latitude, "#38bdf8", driverName);
         }
+        if (liveUserCoords) {
+          addMarker(liveUserCoords.longitude, liveUserCoords.latitude, "#3b82f6", lang === "uz" ? "Siz" : "You");
+        }
 
         if (showRoute) {
           try {
@@ -188,12 +197,29 @@ export default function MapLibre({
     }
   }, [driverCoords?.latitude, driverCoords?.longitude]);
 
+  useEffect(() => {
+    if (liveUserCoords && mapRef.current && markersRef.current[3]) {
+      markersRef.current[3].setLngLat([liveUserCoords.longitude, liveUserCoords.latitude]);
+    }
+  }, [liveUserCoords?.latitude, liveUserCoords?.longitude]);
+
   return (
     <div className={`maplibre-root relative w-full h-full min-h-[5rem] bg-slate-900 overflow-hidden isolate ${className}`}>
       <div ref={containerRef} className="absolute inset-0 w-full h-full" style={{ contain: "strict" }} />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900/90 z-[1] pointer-events-none">
           <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />
+        </div>
+      )}
+      {etaMinutes != null && etaMinutes >= 0 && (
+        <div className="absolute bottom-2 left-2 right-2 z-[3] flex justify-center pointer-events-none">
+          <div className="bg-teal-500/95 text-slate-950 px-3 py-1 rounded-full text-[9px] font-bold shadow-lg animate-pulse">
+            {lang === "uz"
+              ? `Haydovchi ~${etaMinutes} daqiqada`
+              : lang === "ru"
+                ? `Водитель ~${etaMinutes} мин`
+                : `Driver ~${etaMinutes} min`}
+          </div>
         </div>
       )}
       <div className="absolute top-1 right-1 text-[7px] font-mono text-emerald-400 bg-slate-950/80 px-1.5 py-0.5 rounded z-[2] pointer-events-none">
