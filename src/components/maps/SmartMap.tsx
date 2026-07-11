@@ -13,6 +13,8 @@ type MapProps = React.ComponentProps<typeof MapComponent> & {
   onFromMoved?: (lat: number, lng: number) => void;
   /** B nuqta pinini surganda */
   onToMoved?: (lat: number, lng: number) => void;
+  /** Xaritani avtomatik markazlamaslik (taksi A/B tanlash) */
+  lockCamera?: boolean;
 };
 
 export default function SmartMap({
@@ -23,6 +25,7 @@ export default function SmartMap({
   driverCoords,
   onFromMoved,
   onToMoved,
+  lockCamera = false,
   ...props
 }: MapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -50,6 +53,7 @@ export default function SmartMap({
       activeTo={props.activeTo}
       driverName={props.driverName}
       showRoute={props.showRoute}
+      lockCamera={lockCamera}
       onMapClick={props.onMapClick}
       onFromMoved={onFromMoved}
       onToMoved={onToMoved}

@@ -641,7 +641,13 @@ export default function App() {
 
   useEffect(() => {
     if (!gpsPickupActive || !liveCoords || !liveTracking) return;
-    setCustomFromCoords({ latitude: liveCoords.latitude, longitude: liveCoords.longitude });
+    setCustomFromCoords((prev) => {
+      if (!prev) return { latitude: liveCoords.latitude, longitude: liveCoords.longitude };
+      const dLat = Math.abs(prev.latitude - liveCoords.latitude);
+      const dLng = Math.abs(prev.longitude - liveCoords.longitude);
+      if (dLat < 0.00015 && dLng < 0.00015) return prev;
+      return { latitude: liveCoords.latitude, longitude: liveCoords.longitude };
+    });
     const label = formatMapPointLabel(liveCoords.latitude, liveCoords.longitude, lang, "A");
     setDirectFromText(label);
     if (directBookingService === "taxi") {
@@ -695,6 +701,8 @@ export default function App() {
         setGpsPickupActive(false);
         setMapPickStep("dropoff");
         setPinMode("to");
+        mapPickStepRef.current = "dropoff";
+        pinModeRef.current = "to";
         speakText(
           lang === "uz"
             ? "A nuqta belgilandi. Endi xaritada B nuqtani — borish joyini bosing."
@@ -709,6 +717,8 @@ export default function App() {
         setDirectToText(formatMapPointLabel(lat, lng, lang, "B"));
         setMapPickStep("ready");
         setPinMode(null);
+        mapPickStepRef.current = "ready";
+        pinModeRef.current = null;
         speakText(
           lang === "uz"
             ? "B nuqta belgilandi. Buyurtma berishingiz mumkin!"
@@ -2926,10 +2936,11 @@ export default function App() {
                                 </div>
                               )}
 
-                              <div className="h-72 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
+                              <div className="h-72 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0">
                                 <SmartMap
                                   key="taxi-booking-map"
                                   compact={false}
+                                  lockCamera
                                   pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
                                   liveUserCoords={liveCoords}
                                   liveTracking={liveTracking && gpsPickupActive}

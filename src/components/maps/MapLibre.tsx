@@ -29,10 +29,10 @@ interface MapLibreProps {
   activeTo?: string;
   driverName?: string;
   showRoute?: boolean;
+  /** true = foydalanuvchi xaritani erkin siljita oladi, avto-markazlash yo'q */
+  lockCamera?: boolean;
   onMapClick?: (lat: number, lng: number, name: string) => void;
-  /** A nuqta surilganda (drag) chaqiriladi */
   onFromMoved?: (lat: number, lng: number) => void;
-  /** B nuqta surilganda (drag) chaqiriladi */
   onToMoved?: (lat: number, lng: number) => void;
   customFromCoords?: { latitude: number; longitude: number } | null;
   customToCoords?: { latitude: number; longitude: number } | null;
@@ -59,8 +59,8 @@ function makeDot(color: string, label: string) {
 
 function makePin(color: string, letter: string, label: string) {
   const el = document.createElement("div");
-  el.style.width = "26px";
-  el.style.height = "26px";
+  el.style.width = "28px";
+  el.style.height = "28px";
   el.style.borderRadius = "50%";
   el.style.background = color;
   el.style.border = "3px solid white";
@@ -74,16 +74,20 @@ function makePin(color: string, letter: string, label: string) {
   el.style.fontSize = "12px";
   el.style.fontFamily = "sans-serif";
   el.style.userSelect = "none";
+  el.style.touchAction = "none";
   el.textContent = letter;
   el.title = label;
   return el;
 }
+
+type MarkerKey = "from" | "to" | "driver" | "user";
 
 export default function MapLibre({
   activeFrom = "A",
   activeTo = "B",
   driverName = "Haydovchi",
   showRoute = false,
+  lockCamera = false,
   onMapClick,
   onFromMoved,
   onToMoved,
@@ -98,15 +102,16 @@ export default function MapLibre({
 }: MapLibreProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<Partial<Record<"from" | "to" | "driver" | "user", maplibregl.Marker>>>({});
+  const markersRef = useRef<Partial<Record<MarkerKey, maplibregl.Marker>>>({});
+  const draggingRef = useRef<MarkerKey | null>(null);
+  const lastDragEndRef = useRef(0);
   const onMapClickRef = useRef(onMapClick);
   const onFromMovedRef = useRef(onFromMoved);
   const onToMovedRef = useRef(onToMoved);
   const onFailedRef = useRef(onFailed);
+  const lockCameraRef = useRef(lockCamera);
   const loadedRef = useRef(false);
   const failedRef = useRef(false);
-  const lastViewKeyRef = useRef("");
-  const skipNextFitRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [ready, setReady] = useState(false);
 
@@ -114,6 +119,7 @@ export default function MapLibre({
   onFromMovedRef.current = onFromMoved;
   onToMovedRef.current = onToMoved;
   onFailedRef.current = onFailed;
+  lockCameraRef.current = lockCamera;
 
   // Xaritani faqat bir marta yaratish
   useEffect(() => {
@@ -148,10 +154,12 @@ export default function MapLibre({
         container,
         style: OSM_STYLE,
         center: [TASHKENT_CENTER.longitude, TASHKENT_CENTER.latitude],
-        zoom: 12,
+        zoom: 13,
         attributionControl: false,
       });
       mapRef.current = map;
+      map.dragRotate.disable();
+      map.touchZoomRotate.disableRotation();
 
       loadTimeout = setTimeout(() => {
         if (!destroyed && !loadedRef.current) {
@@ -161,7 +169,6 @@ export default function MapLibre({
       }, 15000);
 
       map.on("error", (e) => {
-        // Faqat dastlabki yuklanishda fallback — keyin tile xatolari e'tiborsiz
         if (!destroyed && !loadedRef.current) {
           console.warn("MapLibre error:", e);
           failOnce();
@@ -177,6 +184,9 @@ export default function MapLibre({
       });
 
       map.on("click", (e) => {
+        // Pin surilgandan keyin tasodifiy clickni e'tiborsiz qoldirish
+        if (Date.now() - lastDragEndRef.current < 350) return;
+        if (draggingRef.current) return;
         onMapClickRef.current?.(e.lngLat.lat, e.lngLat.lng, "Tanlangan nuqta");
       });
     } catch (e) {
@@ -187,109 +197,63 @@ export default function MapLibre({
     return cleanup;
   }, []);
 
-  const syncMarkers = () => {
+  // Markerlar — kamera harakatsiz
+  useEffect(() => {
     const map = mapRef.current;
-    if (!map || !loadedRef.current) return;
+    if (!map || !ready) return;
 
     const upsert = (
-      key: "from" | "to" | "driver" | "user",
+      key: MarkerKey,
       coords: { latitude: number; longitude: number } | null | undefined,
       color: string,
-      label: string
+      label: string,
+      draggable: boolean
     ) => {
       if (!coords) {
         markersRef.current[key]?.remove();
         delete markersRef.current[key];
         return;
       }
+
       const lngLat: [number, number] = [coords.longitude, coords.latitude];
       const existing = markersRef.current[key];
+
       if (existing) {
-        // Drag paytida marker pozitsiyasini qayta yozmaslik
-        if (!(existing as unknown as { _isDragging?: boolean })._isDragging) {
+        if (draggingRef.current !== key) {
           existing.setLngLat(lngLat);
         }
         return;
       }
 
-      // A va B nuqtalar suriladigan (draggable) pin
-      if (key === "from" || key === "to") {
-        const letter = key === "from" ? "A" : "B";
-        const marker = new maplibregl.Marker({
-          element: makePin(color, letter, label),
-          draggable: true,
-        })
-          .setLngLat(lngLat)
-          .addTo(map);
+      const el =
+        key === "from" || key === "to"
+          ? makePin(color, key === "from" ? "A" : "B", label)
+          : makeDot(color, label);
 
-        marker.on("dragstart", () => {
-          (marker as unknown as { _isDragging?: boolean })._isDragging = true;
-        });
-        marker.on("dragend", () => {
-          (marker as unknown as { _isDragging?: boolean })._isDragging = false;
-          skipNextFitRef.current = true;
-          const pos = marker.getLngLat();
-          if (key === "from") onFromMovedRef.current?.(pos.lat, pos.lng);
-          else onToMovedRef.current?.(pos.lat, pos.lng);
-        });
-
-        markersRef.current[key] = marker;
-        return;
-      }
-
-      markersRef.current[key] = new maplibregl.Marker({ element: makeDot(color, label) })
+      const marker = new maplibregl.Marker({ element: el, draggable })
         .setLngLat(lngLat)
         .addTo(map);
+
+      if (draggable) {
+        marker.on("dragstart", () => {
+          draggingRef.current = key;
+        });
+        marker.on("dragend", () => {
+          draggingRef.current = null;
+          lastDragEndRef.current = Date.now();
+          const pos = marker.getLngLat();
+          if (key === "from") onFromMovedRef.current?.(pos.lat, pos.lng);
+          else if (key === "to") onToMovedRef.current?.(pos.lat, pos.lng);
+        });
+      }
+
+      markersRef.current[key] = marker;
     };
 
-    upsert("from", customFromCoords, "#2dd4bf", activeFrom);
-    upsert("to", customToCoords, "#f59e0b", activeTo);
-    upsert("driver", driverCoords, "#38bdf8", driverName);
-    upsert("user", liveUserCoords, "#3b82f6", lang === "uz" ? "Siz" : "You");
-  };
-
-  // Markerlar — xarita qayta yaratilmaydi
-  useEffect(() => {
-    if (!ready) return;
-    syncMarkers();
-
-    const map = mapRef.current;
-    if (!map) return;
-
-    const viewKey = [
-      customFromCoords?.latitude,
-      customFromCoords?.longitude,
-      customToCoords?.latitude,
-      customToCoords?.longitude,
-    ].join("|");
-
-    if (viewKey === lastViewKeyRef.current) return;
-    lastViewKeyRef.current = viewKey;
-
-    // Foydalanuvchi pinni surgan bo'lsa — xarita sakramasin
-    if (skipNextFitRef.current) {
-      skipNextFitRef.current = false;
-      return;
-    }
-
-    if (customFromCoords && customToCoords) {
-      const bounds = new maplibregl.LngLatBounds();
-      bounds.extend([customFromCoords.longitude, customFromCoords.latitude]);
-      bounds.extend([customToCoords.longitude, customToCoords.latitude]);
-      map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 500 });
-    } else if (customFromCoords) {
-      map.easeTo({
-        center: [customFromCoords.longitude, customFromCoords.latitude],
-        zoom: 14,
-        duration: 500,
-      });
-    } else if (customToCoords) {
-      map.easeTo({
-        center: [customToCoords.longitude, customToCoords.latitude],
-        zoom: 14,
-        duration: 500,
-      });
-    }
+    upsert("from", customFromCoords, "#2dd4bf", activeFrom, true);
+    upsert("to", customToCoords, "#f59e0b", activeTo, true);
+    upsert("driver", driverCoords, "#38bdf8", driverName, false);
+    upsert("user", liveUserCoords, "#3b82f6", lang === "uz" ? "Siz" : "You", false);
   }, [
     ready,
     customFromCoords?.latitude,
@@ -305,6 +269,33 @@ export default function MapLibre({
     driverName,
     lang,
   ]);
+
+  // Kamera — faqat lockCamera=false bo'lganda va faqat birinchi marta ikkala nuqta paydo bo'lganda
+  const didFitBothRef = useRef(false);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || lockCameraRef.current) return;
+
+    if (customFromCoords && customToCoords && !didFitBothRef.current) {
+      didFitBothRef.current = true;
+      const bounds = new maplibregl.LngLatBounds();
+      bounds.extend([customFromCoords.longitude, customFromCoords.latitude]);
+      bounds.extend([customToCoords.longitude, customToCoords.latitude]);
+      map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 600 });
+    }
+  }, [
+    ready,
+    lockCamera,
+    customFromCoords?.latitude,
+    customFromCoords?.longitude,
+    customToCoords?.latitude,
+    customToCoords?.longitude,
+  ]);
+
+  // lockCamera yoqilganda fit flag qayta tiklanadi (taksi qayta ochilganda)
+  useEffect(() => {
+    if (lockCamera) didFitBothRef.current = false;
+  }, [lockCamera]);
 
   // Yo'l chizig'i
   useEffect(() => {
@@ -375,7 +366,7 @@ export default function MapLibre({
 
   return (
     <div className={`maplibre-root relative w-full h-full min-h-[5rem] bg-slate-900 overflow-hidden isolate ${className}`}>
-      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+      <div ref={containerRef} className="absolute inset-0 w-full h-full touch-pan-x touch-pan-y" />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900/90 z-[1] pointer-events-none">
           <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />
