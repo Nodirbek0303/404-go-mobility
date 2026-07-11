@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Phone, MessageSquare, Send, MapPin, Navigation, Loader2, Car, User } from "lucide-react";
+import React, { useEffect, useRef } from "react";
+import { Phone, MapPin, Navigation, Loader2, Car, User } from "lucide-react";
 import SmartMap from "./maps/SmartMap";
-import { Booking, DriverChatMessage, Language, UserProfile } from "../types";
+import RideChatPanel from "./RideChatPanel";
+import { Booking, Language, UserProfile } from "../types";
 import {
   googleMapsDirections,
   openExternalMap,
@@ -58,8 +59,6 @@ export default function TaxiRidePanel({
   onUpdateOrder,
   onCancel,
 }: TaxiRidePanelProps) {
-  const [pickupMessage, setPickupMessage] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const simulationStartedFor = useRef<string | null>(null);
 
   const fromLat = order.fromCoords?.latitude;
@@ -70,10 +69,7 @@ export default function TaxiRidePanel({
 
   const phase = order.ridePhase ?? "searching";
   const driverChat = order.driverChat ?? [];
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [driverChat.length]);
+  const chatKey = order.serverOrderId || order.id;
 
   // Backend haydovchi tarmog'i — dispatch va sync
   useEffect(() => {
@@ -227,42 +223,6 @@ export default function TaxiRidePanel({
       ? `${order.driverFirstName} ${order.driverLastName}`
       : order.driverName ?? "—";
 
-  const handleSendPickupMessage = () => {
-    const text = pickupMessage.trim();
-    if (!text) return;
-
-    const userMsg: DriverChatMessage = {
-      id: `usr-${Date.now()}`,
-      sender: "user",
-      content: text,
-      timestamp: nowTime(),
-    };
-
-    const updatedChat = [...driverChat, userMsg];
-    onUpdateOrder(order.id, { driverChat: updatedChat, driverNotes: text });
-    setPickupMessage("");
-
-    window.setTimeout(() => {
-      const reply =
-        lang === "uz"
-          ? `Tushundim! ${text} manzilidan kutaman. Tez orada yetib boraman.`
-          : lang === "ru"
-            ? `Понял! Жду вас по адресу: ${text}. Скоро буду.`
-            : `Got it! I'll pick you up at: ${text}. Arriving soon.`;
-      onUpdateOrder(order.id, {
-        driverChat: [
-          ...updatedChat,
-          {
-            id: `drv-${Date.now() + 1}`,
-            sender: "driver",
-            content: reply,
-            timestamp: nowTime(),
-          },
-        ],
-      });
-    }, 1800);
-  };
-
   const openMaps = (provider: "google" | "yandex" | "2gis") => {
     if (!hasRoute || fromLat == null || fromLng == null || toLat == null || toLng == null) return;
     if (provider === "google") {
@@ -413,77 +373,49 @@ export default function TaxiRidePanel({
         </div>
       )}
 
-      {/* Driver chat */}
+      {/* Mijoz ↔ Haydovchi chat */}
       {phase !== "searching" && (
-        <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800 space-y-2">
-          <p className="text-[9px] font-bold text-white uppercase tracking-wide flex items-center gap-1">
-            <MessageSquare className="w-3.5 h-3.5 text-teal-400" />
-            {t.taxi_driver_chat}
-          </p>
+        <RideChatPanel
+          orderId={order.id}
+          chatKey={chatKey}
+          lang={lang}
+          role="user"
+          customerName={userFullName}
+          driverName={driverFullName}
+          initialMessages={driverChat}
+          onChatChange={(msgs) => onUpdateOrder(order.id, { driverChat: msgs })}
+        />
+      )}
 
-          <div className="max-h-[100px] overflow-y-auto space-y-1.5 pr-0.5 scrollbar-none">
-            {driverChat.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[90%] rounded-xl px-2 py-1.5 text-[9px] leading-snug ${
-                    msg.sender === "user"
-                      ? "bg-teal-400 text-slate-950 rounded-tr-none"
-                      : "bg-slate-950 text-gray-200 border border-slate-850 rounded-tl-none"
-                  }`}
-                >
-                  <p className="font-semibold text-[7px] opacity-70 mb-0.5">
-                    {msg.sender === "user" ? userFullName : driverFullName}
-                  </p>
-                  {msg.content}
-                  <p className="text-[6px] text-right mt-0.5 opacity-60 font-mono">{msg.timestamp}</p>
-                </div>
-              </div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
+      {phase === "searching" && (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 text-center text-[9px] text-gray-500">
+          {lang === "uz"
+            ? "Haydovchi topilgach chat ochiladi"
+            : lang === "ru"
+              ? "Чат откроется после назначения водителя"
+              : "Chat opens once a driver is assigned"}
+        </div>
+      )}
 
-          <div className="flex gap-1.5">
-            <input
-              type="text"
-              value={pickupMessage}
-              onChange={(e) => setPickupMessage(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendPickupMessage()}
-              placeholder={t.taxi_pickup_hint}
-              className="flex-1 bg-slate-950 text-[10px] text-white px-2 py-1.5 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400"
-            />
-            <button
-              type="button"
-              onClick={handleSendPickupMessage}
-              disabled={!pickupMessage.trim()}
-              className="bg-teal-400 hover:bg-teal-300 disabled:opacity-40 text-slate-950 p-1.5 rounded-lg transition shrink-0"
-              title={t.taxi_send_to_driver}
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="flex gap-2 pt-0.5">
-            {order.driverPhone && (
-              <a
-                href={`tel:${order.driverPhone}`}
-                className="flex-1 bg-slate-950 hover:bg-slate-900 text-white text-[9px] font-medium py-1.5 rounded-lg border border-slate-800 transition flex items-center justify-center gap-1"
-              >
-                <Phone className="w-3 h-3 text-teal-400" />
-                {t.taxi_call}
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => openMaps("google")}
+      {phase !== "searching" && (
+        <div className="flex gap-2">
+          {order.driverPhone && (
+            <a
+              href={`tel:${order.driverPhone}`}
               className="flex-1 bg-slate-950 hover:bg-slate-900 text-white text-[9px] font-medium py-1.5 rounded-lg border border-slate-800 transition flex items-center justify-center gap-1"
             >
-              <MapPin className="w-3 h-3 text-teal-400" />
-              {t.taxi_open_maps}
-            </button>
-          </div>
+              <Phone className="w-3 h-3 text-teal-400" />
+              {t.taxi_call}
+            </a>
+          )}
+          <button
+            type="button"
+            onClick={() => openMaps("google")}
+            className="flex-1 bg-slate-950 hover:bg-slate-900 text-white text-[9px] font-medium py-1.5 rounded-lg border border-slate-800 transition flex items-center justify-center gap-1"
+          >
+            <MapPin className="w-3 h-3 text-teal-400" />
+            {t.taxi_open_maps}
+          </button>
         </div>
       )}
 

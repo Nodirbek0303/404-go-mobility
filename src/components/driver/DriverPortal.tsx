@@ -9,6 +9,8 @@ import {
   updateDriverPlatformLocation,
 } from "../../services/platformApi";
 import SmartMap from "../maps/SmartMap";
+import RideChatPanel from "../RideChatPanel";
+import { appendRideChat, loadRideChat, nowChatTime } from "../../utils/rideChatStorage";
 
 interface DriverPortalProps {
   lang: "uz" | "en" | "ru";
@@ -71,7 +73,23 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
   const acceptOrder = async () => {
     if (!driver?.currentOrderId) return;
     await driverAcceptPlatformOrder(driver.id, driver.currentOrderId);
-    refreshDriver();
+    await refreshDriver();
+
+    const orderId = driver.currentOrderId;
+    const existing = loadRideChat(orderId);
+    if (existing.length === 0) {
+      appendRideChat(orderId, {
+        id: `drv-welcome-${Date.now()}`,
+        sender: "driver",
+        content:
+          lang === "uz"
+            ? `Salom! Men ${driver.firstName}. Buyurtmangizni qabul qildim, yo'lga chiqyapman.`
+            : lang === "ru"
+              ? `Здравствуйте! Я ${driver.firstName}. Принял заказ, выезжаю.`
+              : `Hi! I'm ${driver.firstName}. Order accepted, on my way.`,
+        timestamp: nowChatTime(),
+      });
+    }
   };
 
   const pushLocation = async (location: GeoPoint) => {
@@ -187,6 +205,12 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
               <div className="nexgo-card p-4 space-y-2 border-teal-500/20">
                 <p className="text-xs text-teal-400 font-mono uppercase">{order.type} · {order.status}</p>
                 <p className="text-sm text-white">{order.from} {order.to ? `→ ${order.to}` : ""}</p>
+                {order.customerName && (
+                  <p className="text-[10px] text-gray-400">
+                    {lang === "uz" ? "Mijoz:" : lang === "ru" ? "Клиент:" : "Passenger:"}{" "}
+                    <span className="text-white font-medium">{order.customerName}</span>
+                  </p>
+                )}
                 <p className="text-lg font-bold text-teal-400">{order.price.toLocaleString()} so'm</p>
                 {order.status === "dispatched" && (
                   <button type="button" onClick={acceptOrder} className="w-full py-2 bg-teal-400 text-slate-950 rounded-xl text-sm font-bold">
@@ -203,6 +227,18 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
                 <Car className="w-8 h-8 opacity-40" />
                 <p className="text-sm">{t.noOrder}</p>
               </div>
+            )}
+
+            {order && order.status !== "dispatched" && order.status !== "pending" && (
+              <RideChatPanel
+                orderId={order.id}
+                chatKey={order.id}
+                lang={lang}
+                role="driver"
+                customerName={order.customerName || (lang === "uz" ? "Mijoz" : lang === "ru" ? "Клиент" : "Passenger")}
+                driverName={`${driver.firstName} ${driver.lastName}`}
+                initialMessages={loadRideChat(order.id)}
+              />
             )}
 
             <div className="nexgo-card p-4 space-y-2 border-blue-500/20">

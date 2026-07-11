@@ -57,6 +57,7 @@ import { translations } from "./translations";
 import { serviceCategories, initialOrders, transitRoutes } from "./servicesData";
 import { Language, Booking, ChatMessage, TransitRoute, UserProfile, AppNotification, SavedAddress, PaymentProvider, AuthSession } from "./types";
 import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
+import { mergeRideChat } from "./utils/rideChatStorage";
 import SmartMap from "./components/maps/SmartMap";
 import DriverPortal from "./components/driver/DriverPortal";
 import { cancelPlatformOrder, createPlatformOrder, geocodeAddress } from "./services/platformApi";
@@ -1583,8 +1584,26 @@ export default function App() {
   }, []);
 
   const handleUpdateOrder = (orderId: string, updates: Partial<Booking>) => {
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o)));
-    setSelectedOrder((prev) => (prev?.id === orderId ? { ...prev, ...updates } : prev));
+    setOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        const next = { ...o, ...updates };
+        if (updates.driverChat) {
+          const key = o.serverOrderId || o.id;
+          mergeRideChat(key, updates.driverChat);
+        }
+        return next;
+      })
+    );
+    setSelectedOrder((prev) => {
+      if (prev?.id !== orderId) return prev;
+      const next = { ...prev, ...updates };
+      if (updates.driverChat && prev) {
+        const key = prev.serverOrderId || prev.id;
+        mergeRideChat(key, updates.driverChat);
+      }
+      return next;
+    });
   };
 
   const handleCancelOrder = (order: Booking) => {
