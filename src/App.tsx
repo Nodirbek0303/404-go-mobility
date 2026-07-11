@@ -2861,9 +2861,21 @@ export default function App() {
                                 </p>
                               </div>
 
-                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
+                              {mapPickStep !== "ready" && (
+                                <div className="bg-teal-400 text-slate-950 p-2 rounded-lg text-[10px] font-bold leading-tight shadow-lg flex items-center gap-2 border border-teal-300 animate-pulse">
+                                  <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping shrink-0" />
+                                  <span>
+                                    {mapPickStep === "pickup"
+                                      ? (lang === "uz" ? "Xaritada A nuqtani bosing — taksi qayerga kelsin" : lang === "ru" ? "Нажмите точку A на карте" : "Tap point A on the map")
+                                      : (lang === "uz" ? "Xaritada B nuqtani bosing — borish joyi" : lang === "ru" ? "Нажмите точку B на карте" : "Tap point B on the map")}
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="h-72 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
                                 <SmartMap
-                                  interactive
+                                  key="taxi-booking-map"
+                                  compact={false}
                                   pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
                                   liveUserCoords={liveCoords}
                                   liveTracking={liveTracking && gpsPickupActive}
@@ -4948,27 +4960,11 @@ export default function App() {
               <span className="text-[10px] text-gray-400 font-mono">Live Tracker</span>
             </div>
             
-            {/* Embedded Live Map — taksi tanlash paytida ikkinchi xarita yo'q */}
+            {/* Live xarita — taksi paytida ko'rinish (faqat ko'rsatish) */}
             <div className="w-full h-[220px] overflow-hidden isolate z-0 rounded-xl">
-              {directBookingService === "taxi" ? (
-                <div className="h-full flex flex-col items-center justify-center bg-slate-950 border border-slate-800 rounded-xl px-4 text-center gap-2">
-                  <MapPin className="w-8 h-8 text-teal-400/60" />
-                  <p className="text-[11px] text-gray-300 font-medium">
-                    {lang === "uz"
-                      ? "A va B nuqtalarni yuqoridagi taksi xaritasida belgilang"
-                      : lang === "ru"
-                        ? "Отметьте точки A и B на карте заказа такси выше"
-                        : "Mark points A and B on the taxi map above"}
-                  </p>
-                  {customFromCoords && customToCoords && (
-                    <p className="text-[10px] text-teal-400 font-mono">
-                      {getCalculatedPrice().toLocaleString()} so'm
-                    </p>
-                  )}
-                </div>
-              ) : (
               <SmartMap
-                compact={false}
+                key={directBookingService === "taxi" ? "live-taxi-preview" : "live-main-map"}
+                compact={directBookingService === "taxi"}
                 liveUserCoords={liveCoords}
                 liveTracking={liveTracking}
                 driverCoords={selectedOrder?.driverCoords ?? null}
@@ -5001,11 +4997,13 @@ export default function App() {
                 }
                 showRoute={
                   !!viewingHistoricalTrip ||
-                  (!!directBookingService && !!customFromCoords && !!customToCoords) ||
+                  (directBookingService === "taxi" && !!customFromCoords && !!customToCoords) ||
+                  (!!directBookingService && directBookingService !== "taxi" && !!customFromCoords && !!customToCoords) ||
                   (!!selectedOrder && selectedOrder.status === "active")
                 }
                 lang={lang}
-                pinMode={viewingHistoricalTrip ? null : pinMode}
+                pinMode={directBookingService === "taxi" || viewingHistoricalTrip ? null : pinMode}
+                serviceMode={directBookingService === "taxi" ? "taxi" : undefined}
                 customFromCoords={
                   viewingHistoricalTrip
                     ? (viewingHistoricalTrip.fromCoords || null)
@@ -5016,9 +5014,8 @@ export default function App() {
                     ? (viewingHistoricalTrip.toCoords || null)
                     : (directBookingService ? customToCoords : null)
                 }
-                onMapClick={handleMapClick}
+                onMapClick={directBookingService === "taxi" ? undefined : handleMapClick}
               />
-              )}
             </div>
           </div>
 
