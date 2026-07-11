@@ -4,8 +4,6 @@ import { EV_STATIONS, PARKING_LOTS } from "../servicePoints";
 
 // Predefined landmark coordinates for Uzbekistan Super App
 export const TASHKENT_LOCATIONS = [
-  { id: "chorsu", name: { uz: "Chorsu bozori", en: "Chorsu Bazaar", ru: "Базар Чорсу" }, lat: 41.3216, lng: 69.2285 },
-  { id: "magic_city", name: { uz: "Magic City bog'i", en: "Magic City Park", ru: "Парк Magic City" }, lat: 41.3031, lng: 69.2486 },
   { id: "amir_temur", name: { uz: "Amir Temur xiyoboni", en: "Amir Temur Square", ru: "Сквер Амира Темура" }, lat: 41.3113, lng: 69.2797 },
   { id: "tashkent_city", name: { uz: "Tashkent City", en: "Tashkent City", ru: "Ташкент Сити" }, lat: 41.3111, lng: 69.2405 },
   { id: "mustaqillik", name: { uz: "Mustaqillik maydoni", en: "Mustaqillik Square", ru: "Площадь Независимости" }, lat: 41.3121, lng: 69.2612 },
@@ -43,8 +41,8 @@ interface MapComponentProps {
 }
 
 export default function MapComponent({
-  activeFrom = "Chorsu",
-  activeTo = "Magic City",
+  activeFrom = "A",
+  activeTo = "B",
   driverName = "Azizbek",
   driverStatus = "Haydovchi yetib kelmoqda",
   showRoute = true,
@@ -128,11 +126,7 @@ export default function MapComponent({
     }
 
     const lowercase = name.toLowerCase();
-    if (lowercase.includes("chorsu")) {
-      return { x: w * 0.22, y: h * 0.65 };
-    } else if (lowercase.includes("magic city")) {
-      return { x: w * 0.72, y: h * 0.45 };
-    } else if (lowercase.includes("amir temur") || lowercase.includes("xiyoboni")) {
+    if (lowercase.includes("amir temur") || lowercase.includes("xiyoboni")) {
       return { x: w * 0.68, y: h * 0.32 };
     } else if (lowercase.includes("mustaqillik") || lowercase.includes("maydoni")) {
       return { x: w * 0.55, y: h * 0.35 };
@@ -330,8 +324,8 @@ export default function MapComponent({
           const label = st.name[lang as "uz" | "en" | "ru"] || st.name.uz;
           ctx.fillText(`⚡ ${label}`, p.x + 8, p.y + 2);
         });
-      } else {
-        // General landmarks (taxi / delivery / cargo routes)
+      } else if (serviceMode !== "taxi") {
+        // General landmarks (delivery / cargo — taxi xaritada ko'rsatilmaydi)
         TASHKENT_LOCATIONS.forEach((loc) => {
           const p = getCanvasXY(loc.name.uz, { latitude: loc.lat, longitude: loc.lng }, w, h);
           ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
@@ -454,6 +448,26 @@ export default function MapComponent({
         ctx.font = "8px sans-serif";
         ctx.fillText(activeFrom, ax + 10, ay + 4);
         ctx.fillText(activeTo, bx + 10, by + 4);
+      } else {
+        // A/B pinlari — yo'l chizilmasa ham ko'rinsin (taksi tanlash)
+        const drawPin = (coords: { latitude: number; longitude: number }, letter: "A" | "B", color: string, label: string) => {
+          const p = getCanvasXY("", coords, w, h);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.font = "bold 8px sans-serif";
+          ctx.fillText(letter, p.x - 3, p.y + 3);
+          ctx.fillStyle = "#9ca3af";
+          ctx.font = "8px sans-serif";
+          ctx.fillText(label, p.x + 10, p.y + 4);
+        };
+        if (customFromCoords) drawPin(customFromCoords, "A", "#10b981", activeFrom);
+        if (customToCoords) drawPin(customToCoords, "B", "#22d3ee", activeTo);
       }
 
       // Draw client GPS marker if live user coords exist

@@ -2852,7 +2852,7 @@ export default function App() {
                                 </p>
                               </div>
 
-                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
+                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair touch-none">
                                 <SmartMap
                                   compact={false}
                                   pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
@@ -2863,7 +2863,7 @@ export default function App() {
                                   serviceMode="taxi"
                                   showRoute={!!customFromCoords && !!customToCoords}
                                   lang={lang}
-                                  customFromCoords={customFromCoords ?? liveCoords}
+                                  customFromCoords={customFromCoords}
                                   customToCoords={customToCoords}
                                   onMapClick={handleMapClick}
                                 />
@@ -2922,39 +2922,6 @@ export default function App() {
                                 </button>
                               </div>
 
-                              <div className="space-y-1 pt-1">
-                                <span className="text-[9px] text-gray-500 font-mono tracking-wider block uppercase">
-                                  {lang === "uz" ? "Tezkor tanlash (xarita)" : "Quick pick on map"}
-                                </span>
-                                <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-none">
-                                  {TASHKENT_LOCATIONS.map((loc) => {
-                                    const locName = loc.name[lang as "uz" | "en" | "ru"] || loc.name.uz;
-                                    return (
-                                      <button
-                                        key={loc.id}
-                                        type="button"
-                                        onClick={() => {
-                                          setGpsPickupActive(false);
-                                          if (mapPickStep === "pickup" || !customFromCoords) {
-                                            setDirectFromText(locName);
-                                            setCustomFromCoords({ latitude: loc.lat, longitude: loc.lng });
-                                            setMapPickStep("dropoff");
-                                            setPinMode("to");
-                                          } else {
-                                            setDirectToText(locName);
-                                            setCustomToCoords({ latitude: loc.lat, longitude: loc.lng });
-                                            setMapPickStep("ready");
-                                            setPinMode(null);
-                                          }
-                                        }}
-                                        className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-teal-500/30 text-[9px] text-gray-300 px-2 py-1 rounded-full whitespace-nowrap shrink-0"
-                                      >
-                                        {locName}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
                             </>
                           ) : (
                             <>
@@ -4988,13 +4955,13 @@ export default function App() {
                 }
                 activeFrom={
                   viewingHistoricalTrip
-                    ? (viewingHistoricalTrip.from || "Chorsu")
-                    : (directBookingService ? directFromText : (selectedOrder?.from || "Chorsu"))
+                    ? (viewingHistoricalTrip.from || (lang === "uz" ? "A nuqta" : "Point A"))
+                    : (directBookingService ? directFromText : (selectedOrder?.from || (lang === "uz" ? "A nuqta" : "Point A")))
                 }
                 activeTo={
                   viewingHistoricalTrip
-                    ? (viewingHistoricalTrip.to || "Magic City")
-                    : (directBookingService ? directToText : (selectedOrder?.to || "Magic City"))
+                    ? (viewingHistoricalTrip.to || (lang === "uz" ? "B nuqta" : "Point B"))
+                    : (directBookingService ? directToText : (selectedOrder?.to || (lang === "uz" ? "B nuqta" : "Point B")))
                 }
                 driverName={
                   viewingHistoricalTrip

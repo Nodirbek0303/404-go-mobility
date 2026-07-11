@@ -22,6 +22,8 @@ const OSM_STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: "osm", type: "raster", source: "osm" }],
 };
 
+const TASHKENT_CENTER = { latitude: 41.3111, longitude: 69.2797 };
+
 interface MapLibreProps {
   activeFrom?: string;
   activeTo?: string;
@@ -38,11 +40,24 @@ interface MapLibreProps {
   lang?: string;
 }
 
+function makeDot(color: string, label: string) {
+  const el = document.createElement("div");
+  el.style.width = "16px";
+  el.style.height = "16px";
+  el.style.borderRadius = "50%";
+  el.style.background = color;
+  el.style.border = "2px solid white";
+  el.style.boxShadow = "0 0 8px rgba(0,0,0,0.45)";
+  el.style.cursor = "pointer";
+  el.title = label;
+  return el;
+}
+
 export default function MapLibre({
-  activeFrom = "Chorsu",
-  activeTo = "Magic City",
+  activeFrom = "A",
+  activeTo = "B",
   driverName = "Haydovchi",
-  showRoute = true,
+  showRoute = false,
   onMapClick,
   customFromCoords,
   customToCoords,
@@ -55,26 +70,27 @@ export default function MapLibre({
 }: MapLibreProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
+  const markersRef = useRef<Partial<Record<"from" | "to" | "driver" | "user", maplibregl.Marker>>>({});
+  const onMapClickRef = useRef(onMapClick);
+  const loadedRef = useRef(false);
   const [loading, setLoading] = useState(true);
 
-  const tashkentCenter = { latitude: 41.3111, longitude: 69.2797 };
-  const from = customFromCoords ?? liveUserCoords ?? tashkentCenter;
-  const hasTo = !!customToCoords;
-  const to = customToCoords ?? from;
+  onMapClickRef.current = onMapClick;
 
+  // Xaritani faqat bir marta yaratish — qayta yuklanish yo'q
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || mapRef.current) return;
 
     let destroyed = false;
     let loadTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       destroyed = true;
+      loadedRef.current = false;
       if (loadTimeout) clearTimeout(loadTimeout);
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
+      Object.values(markersRef.current).forEach((m) => m?.remove());
+      markersRef.current = {};
       try {
         mapRef.current?.remove();
       } catch {
@@ -87,125 +103,190 @@ export default function MapLibre({
       const map = new maplibregl.Map({
         container,
         style: OSM_STYLE,
-        center: [(from.longitude + to.longitude) / 2, (from.latitude + to.latitude) / 2],
-        zoom: 13,
+        center: [TASHKENT_CENTER.longitude, TASHKENT_CENTER.latitude],
+        zoom: 12,
         attributionControl: false,
       });
       mapRef.current = map;
 
       loadTimeout = setTimeout(() => {
-        if (!destroyed && loading) {
+        if (!destroyed && !loadedRef.current) {
           console.warn("MapLibre load timeout");
           onFailed?.();
         }
-      }, 8000);
+      }, 12000);
 
       map.on("error", (e) => {
-        console.warn("MapLibre error:", e);
-        if (!destroyed) onFailed?.();
+        if (!destroyed && !loadedRef.current) {
+          console.warn("MapLibre error:", e);
+          onFailed?.();
+        }
       });
 
-      map.on("load", async () => {
+      map.on("load", () => {
         if (destroyed) return;
+        loadedRef.current = true;
         if (loadTimeout) clearTimeout(loadTimeout);
-
-        const addMarker = (lng: number, lat: number, color: string, label: string) => {
-          const el = document.createElement("div");
-          el.style.width = "14px";
-          el.style.height = "14px";
-          el.style.borderRadius = "50%";
-          el.style.background = color;
-          el.style.border = "2px solid white";
-          el.style.boxShadow = "0 0 6px rgba(0,0,0,0.5)";
-          el.title = label;
-          markersRef.current.push(
-            new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map)
-          );
-        };
-
-        addMarker(from.longitude, from.latitude, "#2dd4bf", activeFrom);
-        if (hasTo) {
-          addMarker(to.longitude, to.latitude, "#f59e0b", activeTo);
-        }
-        if (driverCoords) {
-          addMarker(driverCoords.longitude, driverCoords.latitude, "#38bdf8", driverName);
-        }
-        if (liveUserCoords) {
-          addMarker(liveUserCoords.longitude, liveUserCoords.latitude, "#3b82f6", lang === "uz" ? "Siz" : "You");
-        }
-
-        if (showRoute && hasTo) {
-          try {
-            const route = await fetchOsrmRoute(from.latitude, from.longitude, to.latitude, to.longitude);
-            if (destroyed) return;
-            map.addSource("route", {
-              type: "geojson",
-              data: {
-                type: "Feature",
-                properties: {},
-                geometry: { type: "LineString", coordinates: route.geometry },
-              },
-            });
-            map.addLayer({
-              id: "route-line",
-              type: "line",
-              source: "route",
-              paint: { "line-color": "#2dd4bf", "line-width": 4, "line-opacity": 0.85 },
-            });
-            const bounds = new maplibregl.LngLatBounds();
-            route.geometry.forEach(([lng, lat]) => bounds.extend([lng, lat]));
-            map.fitBounds(bounds, { padding: 40, maxZoom: 15 });
-          } catch {
-            if (!destroyed) {
-              map.addSource("route", {
-                type: "geojson",
-                data: {
-                  type: "Feature",
-                  properties: {},
-                  geometry: {
-                    type: "LineString",
-                    coordinates: [
-                      [from.longitude, from.latitude],
-                      [to.longitude, to.latitude],
-                    ],
-                  },
-                },
-              });
-              map.addLayer({
-                id: "route-line",
-                type: "line",
-                source: "route",
-                paint: { "line-color": "#2dd4bf", "line-width": 3, "line-opacity": 0.7 },
-              });
-            }
-          }
-        }
-
-        if (!destroyed) setLoading(false);
+        setLoading(false);
       });
 
-      if (onMapClick) {
-        map.on("click", (e) => onMapClick(e.lngLat.lat, e.lngLat.lng, "Tanlangan nuqta"));
-      }
+      map.on("click", (e) => {
+        onMapClickRef.current?.(e.lngLat.lat, e.lngLat.lng, "Tanlangan nuqta");
+      });
     } catch (e) {
       console.warn("MapLibre init failed:", e);
       onFailed?.();
     }
 
     return cleanup;
-  }, [from.latitude, from.longitude, to.latitude, to.longitude, showRoute, hasTo, activeFrom, activeTo, liveUserCoords?.latitude, liveUserCoords?.longitude]);
+  }, [onFailed]);
 
-  useEffect(() => {
-    if (markersRef.current[2] && driverCoords) {
-      markersRef.current[2].setLngLat([driverCoords.longitude, driverCoords.latitude]);
-    }
-  }, [driverCoords?.latitude, driverCoords?.longitude]);
+  const setMarker = (
+    key: "from" | "to" | "driver" | "user",
+    coords: { latitude: number; longitude: number } | null | undefined,
+    color: string,
+    label: string
+  ) => {
+    const map = mapRef.current;
+    if (!map || !loadedRef.current) return;
 
-  useEffect(() => {
-    if (liveUserCoords && mapRef.current && markersRef.current[3]) {
-      markersRef.current[3].setLngLat([liveUserCoords.longitude, liveUserCoords.latitude]);
+    if (!coords) {
+      markersRef.current[key]?.remove();
+      delete markersRef.current[key];
+      return;
     }
-  }, [liveUserCoords?.latitude, liveUserCoords?.longitude]);
+
+    const lngLat: [number, number] = [coords.longitude, coords.latitude];
+    const existing = markersRef.current[key];
+    if (existing) {
+      existing.setLngLat(lngLat);
+      return;
+    }
+
+    markersRef.current[key] = new maplibregl.Marker({ element: makeDot(color, label) })
+      .setLngLat(lngLat)
+      .addTo(map);
+  };
+
+  // Markerlar yangilanishi — xarita qayta yaratilmaydi
+  useEffect(() => {
+    if (!loadedRef.current) return;
+
+    setMarker("from", customFromCoords, "#2dd4bf", activeFrom);
+    setMarker("to", customToCoords, "#f59e0b", activeTo);
+    setMarker("driver", driverCoords, "#38bdf8", driverName);
+    setMarker("user", liveUserCoords, "#3b82f6", lang === "uz" ? "Siz" : "You");
+
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (customFromCoords && customToCoords) {
+      const bounds = new maplibregl.LngLatBounds();
+      bounds.extend([customFromCoords.longitude, customFromCoords.latitude]);
+      bounds.extend([customToCoords.longitude, customToCoords.latitude]);
+      map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 600 });
+    } else if (customFromCoords) {
+      map.flyTo({
+        center: [customFromCoords.longitude, customFromCoords.latitude],
+        zoom: 14,
+        duration: 600,
+      });
+    } else if (customToCoords) {
+      map.flyTo({
+        center: [customToCoords.longitude, customToCoords.latitude],
+        zoom: 14,
+        duration: 600,
+      });
+    } else if (liveUserCoords) {
+      map.flyTo({
+        center: [liveUserCoords.longitude, liveUserCoords.latitude],
+        zoom: 13,
+        duration: 600,
+      });
+    }
+  }, [
+    customFromCoords?.latitude,
+    customFromCoords?.longitude,
+    customToCoords?.latitude,
+    customToCoords?.longitude,
+    driverCoords?.latitude,
+    driverCoords?.longitude,
+    liveUserCoords?.latitude,
+    liveUserCoords?.longitude,
+    activeFrom,
+    activeTo,
+    driverName,
+    lang,
+    loading,
+  ]);
+
+  // Yo'l chizig'i — source yangilanadi, xarita emas
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loadedRef.current) return;
+
+    const removeRoute = () => {
+      if (map.getLayer("route-line")) map.removeLayer("route-line");
+      if (map.getSource("route")) map.removeSource("route");
+    };
+
+    if (!showRoute || !customFromCoords || !customToCoords) {
+      removeRoute();
+      return;
+    }
+
+    let cancelled = false;
+
+    const drawRoute = async () => {
+      const from = customFromCoords;
+      const to = customToCoords;
+      let geometry: [number, number][] = [
+        [from.longitude, from.latitude],
+        [to.longitude, to.latitude],
+      ];
+
+      try {
+        const route = await fetchOsrmRoute(from.latitude, from.longitude, to.latitude, to.longitude);
+        if (!cancelled) geometry = route.geometry;
+      } catch {
+        /* straight line fallback */
+      }
+
+      if (cancelled || !mapRef.current) return;
+      const m = mapRef.current;
+
+      const data: GeoJSON.Feature = {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: geometry },
+      };
+
+      const source = m.getSource("route") as maplibregl.GeoJSONSource | undefined;
+      if (source) {
+        source.setData(data);
+      } else {
+        m.addSource("route", { type: "geojson", data });
+        m.addLayer({
+          id: "route-line",
+          type: "line",
+          source: "route",
+          paint: { "line-color": "#2dd4bf", "line-width": 4, "line-opacity": 0.85 },
+        });
+      }
+    };
+
+    void drawRoute();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showRoute,
+    customFromCoords?.latitude,
+    customFromCoords?.longitude,
+    customToCoords?.latitude,
+    customToCoords?.longitude,
+    loading,
+  ]);
 
   return (
     <div className={`maplibre-root relative w-full h-full min-h-[5rem] bg-slate-900 overflow-hidden isolate ${className}`}>
