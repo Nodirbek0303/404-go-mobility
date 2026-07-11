@@ -2,6 +2,7 @@ import React from "react";
 import { Shield, Clock, BadgeCheck, Headphones, CreditCard, Zap, Gift } from "lucide-react";
 import type { Language } from "../../types";
 import { SUPPORT_CONTACT } from "../../supportContact";
+import { couponEarnHint } from "../../utils/walletStorage";
 
 interface Why404PanelProps {
   lang: Language;
@@ -91,10 +92,10 @@ export default function Why404Panel({ lang }: Why404PanelProps) {
         </div>
         <div>
           <p className="text-[11px] font-bold text-amber-300">
-            {lang === "uz" ? "1% cashback har safar" : lang === "ru" ? "1% кэшбэк за поездку" : "1% cashback every ride"}
+            {couponEarnHint(lang)}
           </p>
           <p className="text-[9px] text-gray-400">
-            {lang === "uz" ? "Hamyon → Kupondan foydalaning" : "Use coupons in Wallet"}
+            {lang === "uz" ? "Hamyon → Yig'ilgan kupondan foydalaning" : "Use earned coupons in Wallet"}
           </p>
         </div>
       </div>

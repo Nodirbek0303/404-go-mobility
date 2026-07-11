@@ -79,8 +79,13 @@ import DriverProfileCard from "./components/customer/DriverProfileCard";
 import { useVoiceOrder } from "./hooks/useVoiceOrder";
 import {
   appendWalletTransaction,
+  calcCouponPaymentSplit,
+  calcRideCouponEarn,
+  couponEarnHint,
+  loadCouponBalance,
   loadWalletBalance,
   loadWalletTransactions,
+  saveCouponBalance,
   saveWalletBalance,
   type WalletTransaction,
 } from "./utils/walletStorage";
@@ -336,7 +341,7 @@ export default function App() {
   // Wallet stats & forms
   const [balance, setBalance] = useState<number>(() => loadWalletBalance());
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(() => loadWalletTransactions());
-  const [cashback, setCashback] = useState<number>(125000);
+  const [cashback, setCashback] = useState<number>(() => loadCouponBalance());
   const [loyaltyPoints, setLoyaltyPoints] = useState<number>(380);
   const [activeCoupons, setActiveCoupons] = useState<Array<{ id: string; code: string; type: string; discount: number; isFlat: boolean }>>([
     { id: "coupon-initial-1", code: "NEXWELCOME10", type: "10% Chegirma", discount: 10, isFlat: false },
@@ -409,6 +414,10 @@ export default function App() {
   useEffect(() => {
     saveWalletBalance(balance);
   }, [balance]);
+
+  useEffect(() => {
+    saveCouponBalance(cashback);
+  }, [cashback]);
 
   const recordWalletTx = (
     type: WalletTransaction["type"],
@@ -1110,10 +1119,12 @@ export default function App() {
     });
 
     if (directBookingService === "taxi") {
-      if (balance < price) {
-        promptWalletTopUp(price);
+      const { walletDue } = calcCouponPaymentSplit(price, cashback, useCashbackAsPayment);
+      if (balance < walletDue) {
+        promptWalletTopUp(walletDue);
         return;
       }
+      if (cashback > 0) setUseCashbackAsPayment(true);
       setShowTaxiConfirm(true);
     }
   };
@@ -1298,7 +1309,11 @@ export default function App() {
       maxDeduct = Math.min(cashback, booking.price);
     }
 
-    const earnedCashback = Math.floor(booking.price * 0.1);
+    const earnedCashback = calcRideCouponEarn(booking.price);
+    const walletDue =
+      paymentProvider === "wallet"
+        ? calcCouponPaymentSplit(booking.price, cashback, useCashbackAsPayment).walletDue
+        : booking.price;
 
     if (useCashbackAsPayment && maxDeduct > 0) {
       setCashback((prev) => prev - maxDeduct + earnedCashback);
@@ -1323,8 +1338,8 @@ export default function App() {
 
     if (paymentProvider === "wallet") {
       setBalance((prev) => {
-        const next = Math.max(0, prev - booking.price);
-        recordWalletTx("taxi", booking.price, next, {
+        const next = Math.max(0, prev - walletDue);
+        recordWalletTx("taxi", walletDue, next, {
           uz: `Taksi · ${booking.from || ""} → ${booking.to || ""}`,
           en: `Taxi · ${booking.from || ""} → ${booking.to || ""}`,
           ru: `Такси · ${booking.from || ""} → ${booking.to || ""}`,
@@ -1335,12 +1350,28 @@ export default function App() {
 
     let debitMsg = "";
     if (paymentProvider === "wallet") {
-      debitMsg =
-        lang === "uz"
-          ? `404-GO hamyonidan ${booking.price.toLocaleString()} so'm yechildi!`
-          : lang === "ru"
-            ? `Списано ${booking.price.toLocaleString()} сум с кошелька 404-GO!`
-            : `${booking.price.toLocaleString()} UZS debited from 404-GO wallet!`;
+      if (maxDeduct > 0 && walletDue > 0) {
+        debitMsg =
+          lang === "uz"
+            ? `${maxDeduct.toLocaleString()} so'm kupon + ${walletDue.toLocaleString()} so'm hamyon. +${earnedCashback.toLocaleString()} so'm kupon yig'ildi!`
+            : lang === "ru"
+              ? `${maxDeduct.toLocaleString()} сум купон + ${walletDue.toLocaleString()} сум кошелёк. +${earnedCashback.toLocaleString()} сум купона!`
+              : `${maxDeduct.toLocaleString()} UZS coupon + ${walletDue.toLocaleString()} UZS wallet. +${earnedCashback.toLocaleString()} UZS earned!`;
+      } else if (maxDeduct >= booking.price) {
+        debitMsg =
+          lang === "uz"
+            ? `To'lov to'liq yig'ilgan kupon bilan (${maxDeduct.toLocaleString()} so'm)! +${earnedCashback.toLocaleString()} so'm kupon yig'ildi.`
+            : lang === "ru"
+              ? `Оплата полностью купоном (${maxDeduct.toLocaleString()} сум)! +${earnedCashback.toLocaleString()} сум начислено.`
+              : `Paid fully with coupon (${maxDeduct.toLocaleString()} UZS)! +${earnedCashback.toLocaleString()} UZS earned.`;
+      } else {
+        debitMsg =
+          lang === "uz"
+            ? `404-GO hamyonidan ${walletDue.toLocaleString()} so'm yechildi! +${earnedCashback.toLocaleString()} so'm kupon yig'ildi.`
+            : lang === "ru"
+              ? `Списано ${walletDue.toLocaleString()} сум с кошелька! +${earnedCashback.toLocaleString()} сум купона.`
+              : `${walletDue.toLocaleString()} UZS debited from wallet! +${earnedCashback.toLocaleString()} UZS coupon earned.`;
+      }
     } else if (useCashbackAsPayment && maxDeduct >= booking.price) {
       debitMsg =
         lang === "uz"
@@ -1656,10 +1687,15 @@ export default function App() {
     setConfirmingBooking(true);
 
     if (bookingSnapshot.type === "taxi") {
-      if (balance < bookingSnapshot.price) {
+      const { walletDue } = calcCouponPaymentSplit(
+        bookingSnapshot.price,
+        cashback,
+        useCashbackAsPayment
+      );
+      if (balance < walletDue) {
         bookingSubmittingRef.current = false;
         setConfirmingBooking(false);
-        promptWalletTopUp(bookingSnapshot.price);
+        promptWalletTopUp(walletDue);
         return;
       }
 
@@ -2190,6 +2226,9 @@ export default function App() {
 
     return price;
   };
+
+  const getTaxiPaymentSplit = (price = getCalculatedPrice()) =>
+    calcCouponPaymentSplit(price, cashback, useCashbackAsPayment);
 
   // Send transfer from wallet balance
   const handleTransfer = (e: React.FormEvent) => {
@@ -3247,7 +3286,7 @@ export default function App() {
                               {customFromCoords && customToCoords && (
                                 <div
                                   className={`p-2.5 rounded-xl border text-[9px] ${
-                                    balance >= getCalculatedPrice()
+                                    balance >= getTaxiPaymentSplit().walletDue
                                       ? "border-teal-500/30 bg-teal-500/5 text-teal-200"
                                       : "border-amber-500/40 bg-amber-500/10 text-amber-200"
                                   }`}
@@ -3256,20 +3295,40 @@ export default function App() {
                                     {lang === "uz" ? "404-GO Hamyon" : lang === "ru" ? "404-GO Кошелёк" : "404-GO Wallet"}:{" "}
                                     <span className="font-mono">{balance.toLocaleString()} so'm</span>
                                   </p>
+                                  {cashback > 0 && (
+                                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        checked={useCashbackAsPayment}
+                                        onChange={(e) => setUseCashbackAsPayment(e.target.checked)}
+                                        className="accent-teal-400"
+                                      />
+                                      <span>
+                                        {lang === "uz"
+                                          ? `Yig'ilgan kupon: ${cashback.toLocaleString()} so'm`
+                                          : lang === "ru"
+                                            ? `Накопленный купон: ${cashback.toLocaleString()} сум`
+                                            : `Earned coupon: ${cashback.toLocaleString()} UZS`}
+                                      </span>
+                                    </label>
+                                  )}
                                   <p className="mt-1 opacity-90">
-                                    {balance >= getCalculatedPrice()
+                                    {balance >= getTaxiPaymentSplit().walletDue
                                       ? lang === "uz"
-                                        ? `To'lov hamyondan yechildi · kerak: ${getCalculatedPrice().toLocaleString()} so'm`
+                                        ? `Hamyon: ${getTaxiPaymentSplit().walletDue.toLocaleString()} so'm${getTaxiPaymentSplit().couponDeduct > 0 ? ` (kupon −${getTaxiPaymentSplit().couponDeduct.toLocaleString()})` : ""}`
                                         : lang === "ru"
-                                          ? `Оплата с кошелька · нужно: ${getCalculatedPrice().toLocaleString()} сум`
-                                          : `Paid from wallet · need: ${getCalculatedPrice().toLocaleString()} UZS`
+                                          ? `Кошелёк: ${getTaxiPaymentSplit().walletDue.toLocaleString()} сум`
+                                          : `Wallet: ${getTaxiPaymentSplit().walletDue.toLocaleString()} UZS`
                                       : lang === "uz"
-                                        ? `Balans yetarli emas! Kamida ${getCalculatedPrice().toLocaleString()} so'm to'ldiring.`
+                                        ? `Balans yetarli emas! Kamida ${getTaxiPaymentSplit().walletDue.toLocaleString()} so'm to'ldiring.`
                                         : lang === "ru"
-                                          ? `Недостаточно средств! Пополните минимум на ${getCalculatedPrice().toLocaleString()} сум.`
-                                          : `Insufficient balance! Top up at least ${getCalculatedPrice().toLocaleString()} UZS.`}
+                                          ? `Недостаточно средств! Пополните минимум ${getTaxiPaymentSplit().walletDue.toLocaleString()} сум.`
+                                          : `Insufficient balance! Top up at least ${getTaxiPaymentSplit().walletDue.toLocaleString()} UZS.`}
                                   </p>
-                                  {balance < getCalculatedPrice() && (
+                                  <p className="text-[8px] text-gray-400">
+                                    {couponEarnHint(lang)}
+                                  </p>
+                                  {balance < getTaxiPaymentSplit().walletDue && (
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -3533,7 +3592,9 @@ export default function App() {
                               onClick={() => void submitDirectBooking()}
                               disabled={
                                 directBookingService === "taxi"
-                                  ? !customFromCoords || !customToCoords || balance < getCalculatedPrice()
+                                  ? !customFromCoords ||
+                                    !customToCoords ||
+                                    balance < getTaxiPaymentSplit().walletDue
                                   : !directFromText.trim() ||
                                     (!SINGLE_LOCATION_SERVICES.includes(directBookingService) && !directToText.trim())
                               }
@@ -4205,16 +4266,12 @@ export default function App() {
                         <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 flex items-center justify-between">
                           <div>
                             <p className="text-[9px] font-mono text-emerald-400 uppercase tracking-widest leading-none">
-                              {lang === "uz" ? "Keshbek balansi" : lang === "ru" ? "Кешбек" : "Cashback"}
+                              {lang === "uz" ? "Yig'ilgan kupon" : lang === "ru" ? "Накопленный купон" : "Earned coupon"}
                             </p>
-                            <p className="text-sm font-mono font-bold text-emerald-400 mt-1">+{cashback.toLocaleString()} so'm</p>
+                            <p className="text-sm font-mono font-bold text-emerald-400 mt-1">{cashback.toLocaleString()} so'm</p>
                           </div>
-                          <p className="text-[8px] text-gray-500 max-w-[120px] text-right leading-tight">
-                            {lang === "uz"
-                              ? "Sayohatlardan 10% keshbek"
-                              : lang === "ru"
-                                ? "10% кешбек за поездки"
-                                : "10% cashback on rides"}
+                          <p className="text-[8px] text-gray-500 max-w-[140px] text-right leading-tight">
+                            {couponEarnHint(lang)}
                           </p>
                         </div>
 
@@ -6042,7 +6099,11 @@ export default function App() {
           price={pendingBooking.price}
           paymentProvider="wallet"
           walletBalance={balance}
-          couponCode={appliedCouponId ? activeCoupons.find((c) => c.id === appliedCouponId)?.code : null}
+          couponBalance={cashback}
+          useCoupon={useCashbackAsPayment}
+          onUseCouponChange={setUseCashbackAsPayment}
+          walletDue={calcCouponPaymentSplit(pendingBooking.price, cashback, useCashbackAsPayment).walletDue}
+          couponDeduct={calcCouponPaymentSplit(pendingBooking.price, cashback, useCashbackAsPayment).couponDeduct}
           distanceKm={
             pendingBooking.fromCoords && pendingBooking.toCoords
               ? computeRouteMetrics(pendingBooking.fromCoords, pendingBooking.toCoords, "taxi").distanceKm

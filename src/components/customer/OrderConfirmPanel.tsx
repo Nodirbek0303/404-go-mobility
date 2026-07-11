@@ -1,6 +1,7 @@
 import React from "react";
 import { X, MapPin, Car, CreditCard, Ticket, CheckCircle2 } from "lucide-react";
 import type { Language, PaymentProvider } from "../../types";
+import { couponEarnHint } from "../../utils/walletStorage";
 import { taxiClassLabel, type TaxiClassId } from "../../taxiClasses";
 
 interface OrderConfirmPanelProps {
@@ -11,7 +12,11 @@ interface OrderConfirmPanelProps {
   price: number;
   paymentProvider: PaymentProvider;
   walletBalance?: number;
-  couponCode?: string | null;
+  couponBalance?: number;
+  useCoupon?: boolean;
+  onUseCouponChange?: (value: boolean) => void;
+  walletDue?: number;
+  couponDeduct?: number;
   distanceKm?: number;
   durationMin?: number;
   onConfirm: () => void;
@@ -27,7 +32,11 @@ export default function OrderConfirmPanel({
   price,
   paymentProvider,
   walletBalance,
-  couponCode,
+  couponBalance = 0,
+  useCoupon = false,
+  onUseCouponChange,
+  walletDue = price,
+  couponDeduct = 0,
   distanceKm,
   durationMin,
   onConfirm,
@@ -42,7 +51,7 @@ export default function OrderConfirmPanel({
     pay: lang === "uz" ? "To'lov" : lang === "ru" ? "Оплата" : "Payment",
     total: lang === "uz" ? "Jami" : lang === "ru" ? "Итого" : "Total",
     confirm: lang === "uz" ? "Zakaz qilish" : lang === "ru" ? "Заказать" : "Order now",
-    coupon: lang === "uz" ? "Kupon" : lang === "ru" ? "Купон" : "Coupon",
+    coupon: lang === "uz" ? "Yig'ilgan kupon" : lang === "ru" ? "Накопленный купон" : "Earned coupon",
   };
 
   const payLabel =
@@ -112,7 +121,7 @@ export default function OrderConfirmPanel({
             </div>
           </div>
 
-          {(distanceKm != null || durationMin != null || couponCode) && (
+          {(distanceKm != null || durationMin != null) && (
             <div className="flex flex-wrap gap-2 text-[9px] text-gray-400">
               {distanceKm != null && (
                 <span className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 flex items-center gap-1">
@@ -123,18 +132,44 @@ export default function OrderConfirmPanel({
               {durationMin != null && (
                 <span className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">~{Math.round(durationMin)} min</span>
               )}
-              {couponCode && (
-                <span className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center gap-1">
-                  <Ticket className="w-3 h-3" />
-                  {t.coupon}: {couponCode}
-                </span>
-              )}
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-xs text-gray-400 font-medium">{t.total}</span>
-            <span className="text-lg font-mono font-bold text-blue-300">{price.toLocaleString()} so'm</span>
+          {couponBalance > 0 && onUseCouponChange && (
+            <label className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/25 rounded-xl p-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={useCoupon}
+                onChange={(e) => onUseCouponChange(e.target.checked)}
+                className="accent-amber-400 mt-0.5"
+              />
+              <div className="text-[10px]">
+                <p className="text-amber-300 font-bold flex items-center gap-1">
+                  <Ticket className="w-3.5 h-3.5" />
+                  {t.coupon}: {couponBalance.toLocaleString()} so'm
+                </p>
+                <p className="text-gray-400 mt-0.5">
+                  {couponEarnHint(lang)}
+                </p>
+              </div>
+            </label>
+          )}
+
+          <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800 space-y-1 text-[10px]">
+            <div className="flex justify-between text-gray-400">
+              <span>{t.total}</span>
+              <span className="font-mono text-white">{price.toLocaleString()} so'm</span>
+            </div>
+            {couponDeduct > 0 && (
+              <div className="flex justify-between text-amber-400">
+                <span>{lang === "uz" ? "Kupon chegirma" : "Coupon"}</span>
+                <span className="font-mono">−{couponDeduct.toLocaleString()} so'm</span>
+              </div>
+            )}
+            <div className="flex justify-between text-teal-300 font-bold pt-1 border-t border-slate-800">
+              <span>{lang === "uz" ? "Hamyon" : "Wallet"}</span>
+              <span className="font-mono">{walletDue.toLocaleString()} so'm</span>
+            </div>
           </div>
 
           <button
