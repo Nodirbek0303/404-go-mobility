@@ -48,7 +48,9 @@ import {
   Eye,
   Sliders,
   Camera,
-  Navigation
+  Navigation,
+  Trash2,
+  Loader2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { translations } from "./translations";
@@ -110,15 +112,38 @@ import {
 type BookingType = Booking["type"];
 const SINGLE_LOCATION_SERVICES = ["parking", "ev_charge"];
 
+function normalizeLocationText(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[''`ʻʼ]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 function lookupLocationByText(text: string): { latitude: number; longitude: number } | null {
-  const normalized = text.trim().toLowerCase();
+  const normalized = normalizeLocationText(text);
   if (!normalized) return null;
+
   for (const loc of TASHKENT_LOCATIONS) {
-    const names = [loc.name.uz, loc.name.en, loc.name.ru].map((n) => n.toLowerCase());
+    const names = [loc.name.uz, loc.name.en, loc.name.ru, loc.id.replace(/_/g, " ")].map((n) =>
+      normalizeLocationText(n)
+    );
     if (names.some((n) => normalized === n || normalized.includes(n) || n.includes(normalized))) {
       return { latitude: loc.lat, longitude: loc.lng };
     }
+    const idNorm = normalizeLocationText(loc.id.replace(/_/g, " "));
+    if (normalized.includes(idNorm) || idNorm.split(" ").every((w) => normalized.includes(w))) {
+      return { latitude: loc.lat, longitude: loc.lng };
+    }
   }
+
+  for (const loc of TASHKENT_LOCATIONS) {
+    const words = normalizeLocationText(loc.name.uz).split(" ").filter((w) => w.length > 2);
+    if (words.length >= 2 && words.every((w) => normalized.includes(w))) {
+      return { latitude: loc.lat, longitude: loc.lng };
+    }
+  }
+
   return null;
 }
 
@@ -132,13 +157,48 @@ async function resolveLocationCoords(
   if (fromCatalog) return fromCatalog;
   const q = text.trim();
   if (!q) return null;
-  try {
-    const hits = await geocodeAddress(q, near?.latitude, near?.longitude);
-    if (hits[0]) return { latitude: hits[0].latitude, longitude: hits[0].longitude };
-  } catch {
-    /* geocode optional */
+
+  const queries = [
+    q,
+    `${q}, Toshkent, Uzbekistan`,
+    `${q}, Tashkent, Uzbekistan`,
+  ];
+
+  for (const query of queries) {
+    try {
+      const hits = await geocodeAddress(query, near?.latitude, near?.longitude);
+      if (hits[0]) return { latitude: hits[0].latitude, longitude: hits[0].longitude };
+    } catch {
+      /* try next query */
+    }
   }
   return null;
+}
+
+type StoredPaymentCard = {
+  id: string;
+  name: string;
+  logo: string;
+  number: string;
+  expiry: string;
+  balance: number;
+  active: boolean;
+};
+
+const PAYMENT_CARDS_STORAGE_KEY = "404go_payment_cards_v1";
+
+function loadStoredPaymentCards(): StoredPaymentCard[] {
+  try {
+    const raw = localStorage.getItem(PAYMENT_CARDS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as StoredPaymentCard[];
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function saveStoredPaymentCards(cards: StoredPaymentCard[]) {
+  localStorage.setItem(PAYMENT_CARDS_STORAGE_KEY, JSON.stringify(cards));
 }
 
 function openDirectBookingDefaults(
@@ -251,6 +311,15 @@ export default function App() {
   const [transferPhone, setTransferPhone] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
   const [transferSuccess, setTransferSuccess] = useState(false);
+
+  const [paymentCards, setPaymentCards] = useState<StoredPaymentCard[]>(() => loadStoredPaymentCards());
+  const [newCardNumber, setNewCardNumber] = useState("");
+  const [newCardExpiry, setNewCardExpiry] = useState("");
+  const [newCardCvv, setNewCardCvv] = useState("");
+  const [newCardType, setNewCardType] = useState<"Uzcard" | "Humo" | "Visa" | "Mastercard">("Uzcard");
+  const [newCardStartBalance, setNewCardStartBalance] = useState("500000");
+  const [showAddCard, setShowAddCard] = useState(false);
+  const [resolvingField, setResolvingField] = useState<"from" | "to" | null>(null);
 
   const [showShowcaseModal, setShowShowcaseModal] = useState(false);
   const [showShowcaseInsideApp, setShowShowcaseInsideApp] = useState(false);
@@ -574,6 +643,109 @@ export default function App() {
     }
   };
 
+  const resolveAddressField = async (field: "from" | "to") => {
+    const text = field === "from" ? directFromText.trim() : directToText.trim();
+    if (!text) return;
+
+    setResolvingField(field);
+    try {
+      const existing = field === "from" ? customFromCoords : customToCoords;
+      const near =
+        field === "from"
+          ? liveCoords
+          : customFromCoords ?? liveCoords;
+      const resolved = await resolveLocationCoords(text, existing, near);
+      if (resolved) {
+        if (field === "from") setCustomFromCoords(resolved);
+        else setCustomToCoords(resolved);
+      }
+    } finally {
+      setResolvingField(null);
+    }
+  };
+
+  useEffect(() => {
+    saveStoredPaymentCards(paymentCards);
+  }, [paymentCards]);
+
+  const handleAddCard = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCardNumber.trim() || !newCardExpiry.trim() || !newCardCvv.trim()) {
+      alert(lang === "uz" ? "Iltimos, barcha maydonlarni to'ldiring!" : "Please fill in all fields!");
+      return;
+    }
+    if (newCardCvv.length !== 3) {
+      alert(lang === "uz" ? "CVV kodi 3 ta raqam bo'lishi kerak!" : "CVV must be 3 digits!");
+      return;
+    }
+    const rawNum = newCardNumber.replace(/\s+/g, "");
+    if (rawNum.length < 16) {
+      alert(lang === "uz" ? "Karta raqami kamida 16 ta raqam!" : "Card number must be 16 digits!");
+      return;
+    }
+    const last4 = rawNum.slice(-4);
+    const masked = `${rawNum.slice(0, 4)} •••• •••• ${last4}`;
+    const startBal = parseInt(newCardStartBalance) || 0;
+    const newCard: StoredPaymentCard = {
+      id: `card-${Date.now()}`,
+      name: newCardType,
+      logo: newCardType.toUpperCase(),
+      number: masked,
+      expiry: newCardExpiry,
+      balance: startBal,
+      active: paymentCards.length === 0,
+    };
+    setPaymentCards((prev) => {
+      const next = [...prev, newCard];
+      if (newCard.active) setBalance(startBal);
+      return next;
+    });
+    setNewCardNumber("");
+    setNewCardExpiry("");
+    setNewCardCvv("");
+    setNewCardStartBalance("500000");
+    setShowAddCard(false);
+    speakText(lang === "uz" ? `${newCardType} kartasi biriktirildi` : `${newCardType} card linked`);
+  };
+
+  const handleSelectCard = (id: string) => {
+    setPaymentCards((prev) => {
+      const withBal = prev.map((c) => (c.active ? { ...c, balance: balance } : c));
+      return withBal.map((c) => {
+        if (c.id === id) {
+          setBalance(c.balance || 0);
+          return { ...c, active: true };
+        }
+        return { ...c, active: false };
+      });
+    });
+  };
+
+  const handleRemoveCard = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const card = paymentCards.find((c) => c.id === id);
+    if (!card) return;
+    const ok = window.confirm(
+      lang === "uz"
+        ? `${card.name} (${card.number}) kartasini o'chirishni xohlaysizmi?`
+        : lang === "ru"
+          ? `Удалить карту ${card.name} (${card.number})?`
+          : `Remove card ${card.name} (${card.number})?`
+    );
+    if (!ok) return;
+    setPaymentCards((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      if (card.active && next.length > 0) {
+        const first = next[0];
+        setBalance(first.balance || 0);
+        return next.map((c, i) => ({ ...c, active: i === 0 }));
+      }
+      if (next.length === 0) setBalance(0);
+      return next;
+    });
+    speakText(lang === "uz" ? "Karta o'chirildi" : "Card removed");
+  };
+
   const submitDirectBooking = async () => {
     if (!directBookingService) return;
 
@@ -606,9 +778,13 @@ export default function App() {
     }
 
     const fromCoordsResolved = await resolveLocationCoords(fromLabel, customFromCoords, liveCoords);
-    const toCoordsResolved = isSingle
+    let toCoordsResolved = isSingle
       ? null
-      : await resolveLocationCoords(toLabel, customToCoords, fromCoordsResolved ?? liveCoords);
+      : await resolveLocationCoords(toLabel, customToCoords ?? lookupLocationByText(toLabel), fromCoordsResolved ?? liveCoords);
+
+    if (!isSingle && !toCoordsResolved && toLabel) {
+      toCoordsResolved = await resolveLocationCoords(toLabel, null, fromCoordsResolved ?? liveCoords);
+    }
 
     if (!fromCoordsResolved) {
       const err =
@@ -2560,51 +2736,6 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Tashkent Interactive Map embedded in Mobile view! */}
-                          <div className="h-28 rounded-xl overflow-hidden border border-slate-800 relative shadow-inner mt-1 isolate z-0">
-                            <SmartMap
-                              compact
-                              pinMode={pinMode}
-                              liveUserCoords={liveCoords}
-                              liveTracking={liveTracking}
-                              serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
-                              selectedServicePointId={
-                                directBookingService === "parking"
-                                  ? selectedParkingId
-                                  : directBookingService === "ev_charge"
-                                    ? selectedEvStationId
-                                    : null
-                              }
-                              showRoute={!SINGLE_LOCATION_SERVICES.includes(directBookingService)}
-                              lang={lang}
-                              customFromCoords={
-                                pinMode === "from" 
-                                  ? customFromCoords 
-                                  : (directBookingService ? customFromCoords : null)
-                              }
-                              customToCoords={
-                                pinMode === "to" 
-                                  ? customToCoords 
-                                  : (directBookingService && !SINGLE_LOCATION_SERVICES.includes(directBookingService) ? customToCoords : null)
-                              }
-                              onMapClick={handleMapClick}
-                            />
-                          </div>
-
-                          {/* Helper indicator if user is in map pin mode */}
-                          {pinMode && (
-                            <div className="bg-teal-500/10 border border-teal-500/30 p-2 rounded-lg text-[9px] text-teal-400 flex items-center gap-1.5 animate-pulse font-medium">
-                              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping" />
-                              <span>
-                                {lang === "uz" 
-                                  ? "Xarita ustiga bosib joylashuvni belgilang!" 
-                                  : lang === "ru"
-                                    ? "Нажмите на карту, чтобы выбрать местоположение!"
-                                    : "Click on the map to select location!"}
-                              </span>
-                            </div>
-                          )}
-
                           {/* Field A: Starting point */}
                           <div className="space-y-1">
                             <label className="text-[10px] text-gray-400 font-medium">
@@ -2624,9 +2755,16 @@ export default function App() {
                                   setGpsPickupActive(false);
                                   setCustomFromCoords(lookupLocationByText(val));
                                 }}
+                                onBlur={() => void resolveAddressField("from")}
                                 className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
                                 placeholder={lang === "uz" ? "Masalan: Chorsu bozori" : lang === "ru" ? "Например: Базар Чорсу" : "e.g., Chorsu Bazaar"}
                               />
+                              {customFromCoords && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                              )}
+                              {resolvingField === "from" && (
+                                <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin shrink-0" />
+                              )}
                               <button
                                 onClick={() => setPinMode(pinMode === "from" ? null : "from")}
                                 className={`p-2 rounded-lg border transition ${
@@ -2673,9 +2811,16 @@ export default function App() {
                                     setDirectToText(val);
                                     setCustomToCoords(lookupLocationByText(val));
                                   }}
+                                  onBlur={() => void resolveAddressField("to")}
                                   className="bg-slate-900 text-white text-[11px] p-2 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-400 flex-grow"
                                   placeholder={lang === "uz" ? "Masalan: Magic City bog'i" : lang === "ru" ? "Например: Парк Magic City" : "e.g., Magic City Park"}
                                 />
+                                {customToCoords && (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                                )}
+                                {resolvingField === "to" && (
+                                  <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin shrink-0" />
+                                )}
                                 <button
                                   onClick={() => setPinMode(pinMode === "to" ? null : "to")}
                                   className={`p-2 rounded-lg border transition ${
@@ -2688,6 +2833,52 @@ export default function App() {
                                   {renderIcon("MapPin", "w-3.5 h-3.5")}
                                 </button>
                               </div>
+                            </div>
+                          )}
+
+                          {/* Real OSM map — A/B nuqtalar va marshrut */}
+                          <div className="h-52 rounded-xl overflow-hidden border border-teal-500/20 relative shadow-inner mt-1 isolate z-0">
+                            <SmartMap
+                              compact={false}
+                              pinMode={pinMode}
+                              liveUserCoords={liveCoords}
+                              liveTracking={liveTracking}
+                              activeFrom={directFromText || (lang === "uz" ? "A nuqta" : "Point A")}
+                              activeTo={directToText || (lang === "uz" ? "B nuqta" : "Point B")}
+                              serviceMode={directBookingService as "taxi" | "delivery" | "cargo" | "parking" | "ev_charge"}
+                              selectedServicePointId={
+                                directBookingService === "parking"
+                                  ? selectedParkingId
+                                  : directBookingService === "ev_charge"
+                                    ? selectedEvStationId
+                                    : null
+                              }
+                              showRoute={
+                                !SINGLE_LOCATION_SERVICES.includes(directBookingService) &&
+                                !!customFromCoords &&
+                                !!customToCoords
+                              }
+                              lang={lang}
+                              customFromCoords={customFromCoords ?? liveCoords}
+                              customToCoords={
+                                SINGLE_LOCATION_SERVICES.includes(directBookingService)
+                                  ? null
+                                  : customToCoords
+                              }
+                              onMapClick={handleMapClick}
+                            />
+                          </div>
+
+                          {pinMode && (
+                            <div className="bg-teal-500/10 border border-teal-500/30 p-2 rounded-lg text-[9px] text-teal-400 flex items-center gap-1.5 animate-pulse font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping" />
+                              <span>
+                                {lang === "uz" 
+                                  ? "Xarita ustiga bosib joylashuvni belgilang!" 
+                                  : lang === "ru"
+                                    ? "Нажмите на карту, чтобы выбрать местоположение!"
+                                    : "Click on the map to select location!"}
+                              </span>
                             </div>
                           )}
 
@@ -3468,6 +3659,113 @@ export default function App() {
                                 ? "10% кешбек за поездки"
                                 : "10% cashback on rides"}
                           </p>
+                        </div>
+
+                        <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 space-y-2">
+                          <p className="text-[9px] font-mono text-teal-400 uppercase tracking-widest leading-none">
+                            {lang === "uz" ? "Bank kartalari (ixtiyoriy)" : lang === "ru" ? "Банковские карты (необяз.)" : "Bank cards (optional)"}
+                          </p>
+                          {paymentCards.length === 0 ? (
+                            <p className="text-[9px] text-gray-500">
+                              {lang === "uz" ? "Karta biriktirilmagan. Payme/Click/Uzum orqali to'lang." : "No cards linked. Pay via Payme/Click/Uzum."}
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {paymentCards.map((card) => (
+                                <div
+                                  key={card.id}
+                                  onClick={() => handleSelectCard(card.id)}
+                                  className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition ${
+                                    card.active ? "bg-teal-400/5 border-teal-400/50" : "bg-slate-950 border-slate-900 hover:border-slate-800"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className="w-9 h-6 rounded bg-slate-900 border border-slate-800 flex items-center justify-center text-[7px] font-bold text-teal-400 font-mono shrink-0">
+                                      {card.logo}
+                                    </div>
+                                    <div className="text-left leading-tight min-w-0">
+                                      <span className="text-[10px] font-bold text-gray-200 block truncate">{card.name}</span>
+                                      <p className="text-[9px] text-gray-400 font-mono truncate">{card.number}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleRemoveCard(card.id, e)}
+                                      className="p-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition"
+                                      title={lang === "uz" ? "Kartani o'chirish" : "Remove card"}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {showAddCard ? (
+                            <form onSubmit={handleAddCard} className="space-y-2 pt-1 border-t border-slate-850">
+                              <div className="grid grid-cols-2 gap-2">
+                                <select
+                                  value={newCardType}
+                                  onChange={(e) => setNewCardType(e.target.value as typeof newCardType)}
+                                  className="bg-slate-900 text-white text-[10px] p-2 rounded-lg border border-slate-800"
+                                >
+                                  <option value="Uzcard">Uzcard</option>
+                                  <option value="Humo">Humo</option>
+                                  <option value="Visa">Visa</option>
+                                  <option value="Mastercard">Mastercard</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  placeholder="MM/YY"
+                                  value={newCardExpiry}
+                                  onChange={(e) => {
+                                    let val = e.target.value.replace(/\D/g, "");
+                                    if (val.length > 2) val = val.slice(0, 2) + "/" + val.slice(2, 4);
+                                    setNewCardExpiry(val.slice(0, 5));
+                                  }}
+                                  className="bg-slate-900 text-white text-[10px] p-2 rounded-lg border border-slate-800 font-mono"
+                                  required
+                                />
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="8600 0000 0000 0000"
+                                value={newCardNumber}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/\s+/g, "").replace(/(\d{4})/g, "$1 ").trim();
+                                  setNewCardNumber(val.slice(0, 19));
+                                }}
+                                className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 font-mono"
+                                required
+                              />
+                              <input
+                                type="password"
+                                maxLength={3}
+                                placeholder="CVV"
+                                value={newCardCvv}
+                                onChange={(e) => setNewCardCvv(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                                className="bg-slate-900 text-white text-[10px] p-2 rounded-lg w-full border border-slate-800 font-mono"
+                                required
+                              />
+                              <div className="flex gap-2">
+                                <button type="submit" className="flex-1 bg-teal-400 text-slate-950 text-[9px] font-bold py-2 rounded-lg">
+                                  {lang === "uz" ? "Biriktirish" : "Link"}
+                                </button>
+                                <button type="button" onClick={() => setShowAddCard(false)} className="px-3 text-[9px] text-gray-400 border border-slate-800 rounded-lg">
+                                  {lang === "uz" ? "Bekor" : "Cancel"}
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setShowAddCard(true)}
+                              className="w-full py-2 text-[9px] font-bold text-teal-400 border border-dashed border-teal-500/30 rounded-lg hover:border-teal-500/50 transition"
+                            >
+                              + {lang === "uz" ? "Karta biriktirish" : lang === "ru" ? "Привязать карту" : "Link card"}
+                            </button>
+                          )}
                         </div>
 
                       {/* Loyalty Points Tracker */}

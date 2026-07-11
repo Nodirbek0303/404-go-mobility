@@ -58,8 +58,10 @@ export default function MapLibre({
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const from = customFromCoords ?? { latitude: 41.3216, longitude: 69.2285 };
-  const to = customToCoords ?? { latitude: 41.3031, longitude: 69.2486 };
+  const tashkentCenter = { latitude: 41.3111, longitude: 69.2797 };
+  const from = customFromCoords ?? liveUserCoords ?? tashkentCenter;
+  const hasTo = !!customToCoords;
+  const to = customToCoords ?? from;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -122,7 +124,9 @@ export default function MapLibre({
         };
 
         addMarker(from.longitude, from.latitude, "#2dd4bf", activeFrom);
-        addMarker(to.longitude, to.latitude, "#f59e0b", activeTo);
+        if (hasTo) {
+          addMarker(to.longitude, to.latitude, "#f59e0b", activeTo);
+        }
         if (driverCoords) {
           addMarker(driverCoords.longitude, driverCoords.latitude, "#38bdf8", driverName);
         }
@@ -130,7 +134,7 @@ export default function MapLibre({
           addMarker(liveUserCoords.longitude, liveUserCoords.latitude, "#3b82f6", lang === "uz" ? "Siz" : "You");
         }
 
-        if (showRoute) {
+        if (showRoute && hasTo) {
           try {
             const route = await fetchOsrmRoute(from.latitude, from.longitude, to.latitude, to.longitude);
             if (destroyed) return;
@@ -189,7 +193,7 @@ export default function MapLibre({
     }
 
     return cleanup;
-  }, [from.latitude, from.longitude, to.latitude, to.longitude, showRoute, activeFrom, activeTo]);
+  }, [from.latitude, from.longitude, to.latitude, to.longitude, showRoute, hasTo, activeFrom, activeTo, liveUserCoords?.latitude, liveUserCoords?.longitude]);
 
   useEffect(() => {
     if (markersRef.current[2] && driverCoords) {
