@@ -68,6 +68,11 @@ import AuthModal from "./components/customer/AuthModal";
 import NotificationPanel, { createNotification } from "./components/customer/NotificationPanel";
 import SavedAddressesBar from "./components/customer/SavedAddressesBar";
 import PaymentProviderModal from "./components/customer/PaymentProviderModal";
+import TaxiClassSelector from "./components/customer/TaxiClassSelector";
+import OrderConfirmPanel from "./components/customer/OrderConfirmPanel";
+import Why404Panel from "./components/customer/Why404Panel";
+import AdminPortal from "./components/admin/AdminPortal";
+import { getTaxiClass, type TaxiClassId } from "./taxiClasses";
 import SosShareBar, { callDriver } from "./components/customer/SosShareBar";
 import DriverProfileCard from "./components/customer/DriverProfileCard";
 import { useVoiceOrder } from "./hooks/useVoiceOrder";
@@ -365,6 +370,9 @@ export default function App() {
   const [paymentAmount, setPaymentAmount] = useState(0);
   const [pendingServerOrderId, setPendingServerOrderId] = useState<string | null>(null);
   const [showDriverPortal, setShowDriverPortal] = useState(false);
+  const [showAdminPortal, setShowAdminPortal] = useState(false);
+  const [selectedTaxiClass, setSelectedTaxiClass] = useState<TaxiClassId>("economy");
+  const [showTaxiConfirm, setShowTaxiConfirm] = useState(false);
   const [paymentPurpose, setPaymentPurpose] = useState<"booking" | "topup">("booking");
   const [selectedPaymentProvider, setSelectedPaymentProvider] = useState<PaymentProvider>("payme");
   const [scheduledDateTime, setScheduledDateTime] = useState("");
@@ -374,7 +382,9 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("mode") === "driver") setShowDriverPortal(true);
+    const mode = params.get("mode");
+    if (mode === "driver") setShowDriverPortal(true);
+    if (mode === "admin") setShowAdminPortal(true);
     initFirebaseMessaging().catch(() => {});
   }, []);
 
@@ -954,6 +964,9 @@ export default function App() {
     );
 
     let price = metrics.price;
+    if (directBookingService === "taxi") {
+      price = Math.round(price * getTaxiClass(selectedTaxiClass).multiplier);
+    }
     if (appliedCouponId) {
       const coupon = activeCoupons.find((c) => c.id === appliedCouponId);
       if (coupon) {
@@ -963,16 +976,25 @@ export default function App() {
       }
     }
 
+    const classLabel = getTaxiClass(selectedTaxiClass).name[lang];
     setPendingBooking({
       type: toBookingType(directBookingService),
       from: fromLabel,
       to: isSingle ? undefined : toLabel,
       price,
       title: getDirectBookingLabel(directBookingService, "en"),
-      subtitle: isSingle ? fromLabel : `${fromLabel} → ${toLabel}`,
+      subtitle: isSingle
+        ? fromLabel
+        : directBookingService === "taxi"
+          ? `${classLabel} · ${fromLabel} → ${toLabel}`
+          : `${fromLabel} → ${toLabel}`,
       fromCoords: fromCoordsResolved,
       toCoords: toCoordsResolved ?? undefined,
     });
+
+    if (directBookingService === "taxi") {
+      setShowTaxiConfirm(true);
+    }
   };
 
   // Quick prompt suggestions
@@ -1332,6 +1354,7 @@ export default function App() {
       toCoords: toCoordsFinal,
       scheduledAt: isScheduled ? scheduledDateTime : undefined,
       paymentProvider,
+      taxiClass: isTaxi ? selectedTaxiClass : undefined,
       driverPhone: "+998901234567",
       driverTrips: serviceDriverInfo.trips ?? 0,
       driverVerified: true,
@@ -1924,6 +1947,10 @@ export default function App() {
 
   const getCalculatedPrice = () => {
     let price = getRouteMetrics().price;
+
+    if (directBookingService === "taxi") {
+      price = Math.round(price * getTaxiClass(selectedTaxiClass).multiplier);
+    }
 
     if (appliedCouponId) {
       const coupon = activeCoupons.find((c) => c.id === appliedCouponId);
@@ -2972,6 +2999,15 @@ export default function App() {
                                 </button>
                               </div>
 
+                              {customFromCoords && customToCoords && (
+                                <TaxiClassSelector
+                                  lang={lang}
+                                  selected={selectedTaxiClass}
+                                  basePrice={getRouteMetrics().price}
+                                  onSelect={setSelectedTaxiClass}
+                                />
+                              )}
+
                             </>
                           ) : (
                             <>
@@ -3344,6 +3380,8 @@ export default function App() {
                               ))}
                             </div>
                           </div>
+
+                          <Why404Panel lang={lang} />
                         </>
                       )}
                     </motion.div>
@@ -4339,10 +4377,19 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setShowDriverPortal(true)}
-                          className="w-full py-2 bg-slate-900 border border-slate-800 hover:border-teal-500/40 text-[10px] font-bold text-white rounded-lg flex items-center justify-center gap-2"
+                          className="w-full py-2 bg-slate-900 border border-slate-800 hover:border-blue-500/40 text-[10px] font-bold text-white rounded-lg flex items-center justify-center gap-2"
                         >
-                          <Car className="w-3.5 h-3.5 text-teal-400" />
+                          <Car className="w-3.5 h-3.5 text-blue-400" />
                           {lang === "uz" ? "Haydovchi portali" : lang === "ru" ? "Портал водителя" : "Driver portal"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminPortal(true)}
+                          className="w-full py-2 bg-blue-600/15 border border-blue-500/30 hover:border-blue-400 text-[10px] font-bold text-blue-200 rounded-lg flex items-center justify-center gap-2"
+                        >
+                          <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                          {lang === "uz" ? "Admin panel" : lang === "ru" ? "Админ-панель" : "Admin panel"}
                         </button>
 
                         <SavedAddressesBar
@@ -4741,7 +4788,7 @@ export default function App() {
 
             {/* Simulated Live Booking Dialog */}
             <AnimatePresence>
-              {pendingBooking && (
+              {pendingBooking && !(pendingBooking.type === "taxi" && showTaxiConfirm) && (
                 <motion.div
                   initial={{ opacity: 0, y: 100 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -5688,8 +5735,42 @@ export default function App() {
         }}
       />
 
+      {showTaxiConfirm && pendingBooking?.type === "taxi" && (
+        <OrderConfirmPanel
+          lang={lang}
+          from={pendingBooking.from || ""}
+          to={pendingBooking.to || ""}
+          taxiClass={selectedTaxiClass}
+          price={pendingBooking.price}
+          paymentProvider={selectedPaymentProvider}
+          couponCode={appliedCouponId ? activeCoupons.find((c) => c.id === appliedCouponId)?.code : null}
+          distanceKm={
+            pendingBooking.fromCoords && pendingBooking.toCoords
+              ? computeRouteMetrics(pendingBooking.fromCoords, pendingBooking.toCoords, "taxi").distanceKm
+              : undefined
+          }
+          durationMin={
+            pendingBooking.fromCoords && pendingBooking.toCoords
+              ? computeRouteMetrics(pendingBooking.fromCoords, pendingBooking.toCoords, "taxi").durationMin
+              : undefined
+          }
+          onClose={() => {
+            setShowTaxiConfirm(false);
+            setPendingBooking(null);
+          }}
+          onConfirm={() => {
+            setShowTaxiConfirm(false);
+            void handleConfirmBooking();
+          }}
+        />
+      )}
+
       {showDriverPortal && (
         <DriverPortal lang={lang} onClose={() => setShowDriverPortal(false)} />
+      )}
+
+      {showAdminPortal && (
+        <AdminPortal lang={lang} bookings={orders} onClose={() => setShowAdminPortal(false)} />
       )}
 
     </div>

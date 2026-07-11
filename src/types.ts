@@ -57,6 +57,7 @@ export interface Booking {
   driverTrips?: number;
   driverVerified?: boolean;
   paymentProvider?: PaymentProvider;
+  taxiClass?: "economy" | "comfort" | "business";
   driverDistanceKm?: number;
   cancelFee?: number;
   tripDistanceKm?: number;

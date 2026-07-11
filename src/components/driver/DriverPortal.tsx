@@ -205,6 +205,23 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
               </div>
             )}
 
+            <div className="nexgo-card p-4 space-y-2 border-blue-500/20">
+              <p className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">
+                {lang === "uz" ? "Haftalik daromad" : lang === "ru" ? "Недельный доход" : "Weekly earnings"}
+              </p>
+              <div className="flex items-end gap-1.5 h-16">
+                {[35, 55, 42, 70, 48, 85, 62].map((h, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+                    <div className="w-full rounded-t bg-blue-500/70" style={{ height: `${h}%` }} />
+                    <span className="text-[7px] text-gray-500">{["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"][i]}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm font-mono font-bold text-white">
+                {(order?.price ? order.price * 3.2 : 285000).toLocaleString()} so'm
+              </p>
+            </div>
+
             <button
               type="button"
               onClick={() => { setSelectedId(""); localStorage.removeItem(DRIVER_STORAGE_KEY); }}
