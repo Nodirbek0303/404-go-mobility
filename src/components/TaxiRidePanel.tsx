@@ -8,6 +8,7 @@ import {
   twoGisPoint,
   yandexNavigatorRoute,
 } from "../utils/mapProviders";
+import { calculateCancelFee, cancelFeeLabel } from "../utils/cancelFee";
 
 const MOCK_DRIVERS = [
   {
@@ -44,6 +45,7 @@ interface TaxiRidePanelProps {
   lang: Language;
   t: Translations;
   onUpdateOrder: (orderId: string, updates: Partial<Booking>) => void;
+  onCancel?: (order: Booking) => void;
 }
 
 function formatPhoneDisplay(phone: string) {
@@ -64,6 +66,7 @@ export default function TaxiRidePanel({
   lang,
   t,
   onUpdateOrder,
+  onCancel,
 }: TaxiRidePanelProps) {
   const [pickupMessage, setPickupMessage] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -98,6 +101,7 @@ export default function TaxiRidePanel({
     const t1 = window.setTimeout(() => {
       onUpdateOrder(order.id, {
         ridePhase: "accepted",
+        driverDistanceKm: 0.3,
         driverFirstName: driver.firstName,
         driverLastName: driver.lastName,
         driverName: `${driver.firstName} ${driver.lastName}`,
@@ -118,11 +122,11 @@ export default function TaxiRidePanel({
     }, 2500);
 
     const t2 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "arriving", etaMinutes: 6 });
+      onUpdateOrder(order.id, { ridePhase: "arriving", etaMinutes: 6, driverDistanceKm: 1.8 });
     }, 5000);
 
     const t3 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "in_ride", etaMinutes: 0 });
+      onUpdateOrder(order.id, { ridePhase: "in_ride", etaMinutes: 0, driverDistanceKm: 4.2 });
     }, 14000);
 
     return () => {
@@ -144,6 +148,26 @@ export default function TaxiRidePanel({
     }, 8000);
     return () => clearInterval(interval);
   }, [phase, order.id, order.etaMinutes, onUpdateOrder]);
+
+  // Haydovchi yo'l bosib kelgan masofani simulyatsiya qilish
+  useEffect(() => {
+    if (order.status !== "active" || order.type !== "taxi") return;
+    if (phase === "searching") return;
+
+    const interval = window.setInterval(() => {
+      const current = order.driverDistanceKm ?? 0;
+      const increment = phase === "in_ride" ? 0.55 : phase === "arriving" ? 0.4 : 0.2;
+      const maxKm = phase === "in_ride" ? 12 : 4.5;
+      if (current >= maxKm) return;
+      onUpdateOrder(order.id, {
+        driverDistanceKm: Math.round(Math.min(current + increment, maxKm) * 10) / 10,
+      });
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [phase, order.id, order.status, order.type, order.driverDistanceKm, onUpdateOrder]);
+
+  const cancelPreview = calculateCancelFee(order);
 
   const phaseLabel = () => {
     if (phase === "searching") return t.taxi_searching;
@@ -289,6 +313,15 @@ export default function TaxiRidePanel({
             {t.taxi_eta}: ~{order.etaMinutes} {t.taxi_minutes}
           </p>
         )}
+        {phase !== "searching" && (order.driverDistanceKm ?? 0) > 0 && (
+          <p className="text-[8px] text-center text-gray-400 font-mono">
+            {lang === "uz"
+              ? `Haydovchi bosib kelgan: ${(order.driverDistanceKm ?? 0).toFixed(1)} km`
+              : lang === "ru"
+                ? `Водитель проехал: ${(order.driverDistanceKm ?? 0).toFixed(1)} км`
+                : `Driver traveled: ${(order.driverDistanceKm ?? 0).toFixed(1)} km`}
+          </p>
+        )}
       </div>
 
       {/* Contact cards — both sides visible after accept */}
@@ -404,6 +437,32 @@ export default function TaxiRidePanel({
               {t.taxi_open_maps}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Bekor qilish */}
+      {onCancel && (
+        <div className="space-y-1.5">
+          {phase !== "searching" && (
+            <p
+              className={`text-[8px] text-center px-2 py-1 rounded-lg border ${
+                cancelPreview.fee > 0
+                  ? "text-amber-300 bg-amber-500/10 border-amber-500/25"
+                  : "text-gray-500 bg-slate-900 border-slate-800"
+              }`}
+            >
+              {cancelFeeLabel(cancelPreview, lang)}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => onCancel(order)}
+            className="w-full bg-red-950/40 hover:bg-red-950/60 text-red-400 text-[10px] font-medium py-1.5 rounded-lg border border-red-900/30 transition"
+          >
+            {phase === "searching"
+              ? `${t.bekor_qilish} (${lang === "uz" ? "bepul" : lang === "ru" ? "бесплатно" : "free"})`
+              : t.bekor_qilish}
+          </button>
         </div>
       )}
     </div>

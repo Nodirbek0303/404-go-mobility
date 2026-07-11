@@ -57,6 +57,8 @@ export interface Booking {
   driverTrips?: number;
   driverVerified?: boolean;
   paymentProvider?: PaymentProvider;
+  driverDistanceKm?: number;
+  cancelFee?: number;
 }
 export interface DriverChatMessage {
   id: string;

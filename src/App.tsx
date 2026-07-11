@@ -87,6 +87,12 @@ import {
   twoGisPoint,
   yandexNavigatorRoute,
 } from "./utils/mapProviders";
+import {
+  calculateCancelFee,
+  cancelConfirmMessage,
+  cancelSuccessMessage,
+  cancelFeeLabel,
+} from "./utils/cancelFee";
 
 type BookingType = Booking["type"];
 const SINGLE_LOCATION_SERVICES = ["parking", "ev_charge"];
@@ -822,6 +828,8 @@ export default function App() {
               rating: parseFloat((4.7 + Math.random() * 0.3).toFixed(2)),
               duration: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "1 soat" : "18 daqiqa",
               distance: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "—" : "12.4 km",
+              driverDistanceKm:
+                pendingBooking.type === "delivery" || pendingBooking.type === "cargo" ? 1.2 : undefined,
             }
           : {}),
     };
@@ -951,6 +959,66 @@ export default function App() {
   const handleUpdateOrder = (orderId: string, updates: Partial<Booking>) => {
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o)));
     setSelectedOrder((prev) => (prev?.id === orderId ? { ...prev, ...updates } : prev));
+  };
+
+  const handleCancelOrder = (order: Booking) => {
+    const feeResult = calculateCancelFee(order);
+
+    if (!window.confirm(cancelConfirmMessage(feeResult, lang))) return;
+
+    if (feeResult.fee > 0) {
+      if (balance < feeResult.fee) {
+        const err =
+          lang === "uz"
+            ? `Balansingizda yetarli mablag' yo'q. Kerak: ${feeResult.fee.toLocaleString()} so'm`
+            : lang === "ru"
+              ? `Недостаточно средств. Нужно: ${feeResult.fee.toLocaleString()} сум`
+              : `Insufficient balance. Required: ${feeResult.fee.toLocaleString()} UZS`;
+        alert(err);
+        speakText(err);
+        return;
+      }
+      setBalance((prev) => prev - feeResult.fee);
+    }
+
+    const cancelledOrder: Booking = {
+      ...order,
+      status: "completed",
+      statusText: {
+        uz: feeResult.fee > 0 ? `Bekor qilindi (−${feeResult.fee.toLocaleString()} so'm)` : "Bekor qilindi",
+        en: feeResult.fee > 0 ? `Cancelled (−${feeResult.fee.toLocaleString()} UZS)` : "Cancelled",
+        ru: feeResult.fee > 0 ? `Отменено (−${feeResult.fee.toLocaleString()} сум)` : "Отменено",
+      },
+      cancelFee: feeResult.fee,
+      price: feeResult.fee > 0 ? feeResult.fee : order.price,
+    };
+
+    setOrders((prev) => prev.map((o) => (o.id === order.id ? cancelledOrder : o)));
+    setSelectedOrder(null);
+
+    const msg = cancelSuccessMessage(feeResult, lang);
+    speakText(msg);
+
+    pushNotification({
+      type: feeResult.fee > 0 ? "payment" : "order",
+      orderId: order.id,
+      title: {
+        uz: "Buyurtma bekor qilindi",
+        en: "Order cancelled",
+        ru: "Заказ отменён",
+      },
+      body: {
+        uz: feeResult.fee > 0
+          ? `${feeResult.distanceKm.toFixed(1)} km uchun ${feeResult.fee.toLocaleString()} so'm yechildi`
+          : "To'lov olinmadi — bepul bekor qilish",
+        en: feeResult.fee > 0
+          ? `${feeResult.fee.toLocaleString()} UZS charged for ${feeResult.distanceKm.toFixed(1)} km`
+          : "No charge — free cancellation",
+        ru: feeResult.fee > 0
+          ? `Списано ${feeResult.fee.toLocaleString()} сум за ${feeResult.distanceKm.toFixed(1)} км`
+          : "Без оплаты — бесплатная отмена",
+      },
+    });
   };
 
   // Submit rating and feedback tags for completed trip
@@ -2859,27 +2927,8 @@ export default function App() {
                                 lang={lang}
                                 t={t}
                                 onUpdateOrder={handleUpdateOrder}
+                                onCancel={handleCancelOrder}
                               />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOrders((prev) =>
-                                    prev.map((o) =>
-                                      o.id === selectedOrder.id
-                                        ? {
-                                            ...o,
-                                            status: "completed",
-                                            statusText: { uz: "Bekor qilindi", en: "Cancelled", ru: "Отменено" },
-                                          }
-                                        : o
-                                    )
-                                  );
-                                  setSelectedOrder(null);
-                                }}
-                                className="w-full bg-red-950/40 hover:bg-red-950/60 text-red-400 text-[10px] font-medium py-1.5 rounded-lg border border-red-900/30 transition"
-                              >
-                                {t.bekor_qilish}
-                              </button>
                             </>
                           ) : (
                             <>
@@ -3043,6 +3092,14 @@ export default function App() {
                                 )}
                               </div>
 
+                              {selectedOrder.status === "active" &&
+                                selectedOrder.type !== "taxi" &&
+                                calculateCancelFee(selectedOrder).fee > 0 && (
+                                  <p className="text-[8px] text-center text-amber-300 bg-amber-500/10 border border-amber-500/25 px-2 py-1 rounded-lg">
+                                    {cancelFeeLabel(calculateCancelFee(selectedOrder), lang)}
+                                  </p>
+                                )}
+
                               <div className="flex gap-2 pt-1">
                                 <button
                                   type="button"
@@ -3053,11 +3110,8 @@ export default function App() {
                                   {t.haydovchiga_qongiroq}
                                 </button>
                                 <button
-                                  onClick={() => {
-                                    // cancel
-                                    setOrders(prev => prev.map(o => o.id === selectedOrder.id ? { ...o, status: "completed", statusText: { uz: "Bekor qilindi", en: "Cancelled", ru: "Отменено" } } : o));
-                                    setSelectedOrder(null);
-                                  }}
+                                  type="button"
+                                  onClick={() => handleCancelOrder(selectedOrder)}
                                   className="flex-1 bg-red-950/40 hover:bg-red-950/60 text-red-400 text-[10px] font-medium py-1.5 rounded-lg border border-red-900/30 transition"
                                 >
                                   {t.bekor_qilish}
