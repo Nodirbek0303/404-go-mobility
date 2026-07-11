@@ -1,15 +1,31 @@
 import express from "express";
 import path from "path";
+import { createServer } from "http";
 import dotenv from "dotenv";
+import { WebSocketServer } from "ws";
 import { GoogleGenAI } from "@google/genai";
 import { getSimulatedResponse } from "./lib/simulated-response";
+import { subscribeEvents } from "./lib/realtime/bus";
 
 dotenv.config();
 
 async function startServer() {
   const app = await createApp();
   const PORT = Number(process.env.PORT) || 3000;
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = createServer(app);
+
+  if (!process.env.VERCEL) {
+    const wss = new WebSocketServer({ server: httpServer, path: "/api/ws" });
+    wss.on("connection", (ws) => {
+      const unsub = subscribeEvents((evt) => {
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
+      });
+      ws.on("close", () => unsub());
+    });
+    console.log("WebSocket: ws://localhost:" + PORT + "/api/ws");
+  }
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
@@ -100,10 +116,14 @@ export async function createApp(options: { apiOnly?: boolean } = {}) {
     handlePaymentCreate,
     handlePaymentConfirm,
     handlePaymentConfig,
+    handleRoute,
+    handleRealtimeSSE,
   } = await import("./lib/api/platformHandlers");
 
   app.get("/api/config", handlePlatformConfig);
   app.get("/api/geocode", handleGeocode);
+  app.get("/api/route", handleRoute);
+  app.get("/api/realtime", handleRealtimeSSE);
 
   app.get("/api/orders", handleOrdersList);
   app.post("/api/orders", handleOrderCreate);

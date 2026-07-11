@@ -18,9 +18,9 @@ import {
 } from "../utils/geoCalc";
 import {
   dispatchPlatformOrder,
-  getPlatformOrder,
   mapDriverToBooking,
   orderStatusToRidePhase,
+  subscribeOrderRealtime,
 } from "../services/platformApi";
 
 const DRIVER_TICK_MS = 2000;
@@ -115,27 +115,23 @@ export default function TaxiRidePanel({
       });
   }, [order.id, order.status, order.type, order.serverOrderId, phase, lang, onUpdateOrder, fromLat, fromLng]);
 
-  // Serverdan haydovchi GPS sync
+  // SSE/WebSocket real-time sync
   useEffect(() => {
     if (!order.serverOrderId || phase === "searching") return;
-    const interval = window.setInterval(async () => {
-      try {
-        const { order: srvOrder, driver } = await getPlatformOrder(order.serverOrderId!);
-        const updates: Partial<Booking> = {
-          ridePhase: orderStatusToRidePhase(srvOrder.status),
-          driverDistanceKm: srvOrder.driverDistanceKm,
-        };
-        if (srvOrder.driverCoords) updates.driverCoords = srvOrder.driverCoords;
-        if (driver) Object.assign(updates, mapDriverToBooking(driver));
-        if (srvOrder.status === "accepted" && phase === "accepted") {
-          updates.ridePhase = "arriving";
-        }
-        onUpdateOrder(order.id, updates);
-      } catch {
-        /* local GPS sim continues */
-      }
-    }, 4000);
-    return () => clearInterval(interval);
+
+    const unsub = subscribeOrderRealtime(order.serverOrderId, ({ order: srvOrder, driver }) => {
+      if (!srvOrder) return;
+      const updates: Partial<Booking> = {
+        ridePhase: orderStatusToRidePhase(srvOrder.status),
+        driverDistanceKm: srvOrder.driverDistanceKm,
+      };
+      if (srvOrder.driverCoords) updates.driverCoords = srvOrder.driverCoords;
+      if (driver) Object.assign(updates, mapDriverToBooking(driver));
+      if (srvOrder.status === "accepted" && phase === "accepted") updates.ridePhase = "arriving";
+      onUpdateOrder(order.id, updates);
+    });
+
+    return unsub;
   }, [order.id, order.serverOrderId, phase, onUpdateOrder]);
 
   // ETA countdown while arriving

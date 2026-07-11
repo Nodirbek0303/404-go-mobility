@@ -13,6 +13,8 @@
     "api/drivers.ts": { "maxDuration": 30 },
     "api/payments.ts": { "maxDuration": 30 },
     "api/geocode.ts": { "maxDuration": 20 },
+    "api/route.ts": { "maxDuration": 20 },
+    "api/realtime.ts": { "maxDuration": 60 },
     "api/config.ts": { "maxDuration": 10 }
   }
 }

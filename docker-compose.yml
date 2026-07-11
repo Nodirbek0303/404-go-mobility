@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: nexgo
+      POSTGRES_PASSWORD: nexgo
+      POSTGRES_DB: nexgo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./lib/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  osrm:
+    image: osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/uzbekistan.osrm
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./docker/osrm:/data
+
+volumes:
+  pgdata:

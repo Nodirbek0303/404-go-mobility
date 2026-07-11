@@ -58,6 +58,7 @@ import MapComponent, { TASHKENT_LOCATIONS } from "./components/MapComponent";
 import SmartMap from "./components/maps/SmartMap";
 import DriverPortal from "./components/driver/DriverPortal";
 import { cancelPlatformOrder, createPlatformOrder } from "./services/platformApi";
+import { initFirebaseMessaging } from "./services/fcm";
 import UIUXShowcase from "./components/UIUXShowcase";
 import TaxiRidePanel from "./components/TaxiRidePanel";
 import AuthModal from "./components/customer/AuthModal";
@@ -240,6 +241,7 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("mode") === "driver") setShowDriverPortal(true);
+    initFirebaseMessaging().catch(() => {});
   }, []);
 
   const pushNotification = (partial: Omit<AppNotification, "id" | "read" | "createdAt">) => {

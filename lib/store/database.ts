@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { INITIAL_DRIVER_FLEET } from "../drivers/fleet";
+import { pgFindNearestDriver } from "../db/postgres";
+import { publishEvent } from "../realtime/bus";
 import type {
   DriverRecord,
   GeoPoint,
@@ -127,33 +129,50 @@ export function updateDriver(id: string, patch: Partial<DriverRecord>): DriverRe
   return db.drivers[idx];
 }
 
-/** Eng yaqin bo'sh haydovchini topish va tayinlash */
-export function dispatchNearestDriver(orderId: string): { order: OrderRecord; driver: DriverRecord } | null {
+/** Eng yaqin bo'sh haydovchini topish va tayinlash (PostGIS yoki Haversine) */
+export async function dispatchNearestDriver(orderId: string): Promise<{ order: OrderRecord; driver: DriverRecord } | null> {
   const db = getDb();
   const order = db.orders.find((o) => o.id === orderId);
   if (!order || !order.fromCoords) return null;
 
-  const eligible = db.drivers.filter(
-    (d) =>
-      d.status === "online" &&
-      !d.currentOrderId &&
-      (d.serviceTypes.includes(order.type as "taxi" | "delivery" | "cargo") ||
-        order.type === "parking" ||
-        order.type === "ev_charge")
-  );
+  let best: DriverRecord | null = null;
+  let bestKm = Infinity;
 
-  if (!eligible.length) return null;
-
-  let best = eligible[0];
-  let bestKm = haversineKm(order.fromCoords, best.location);
-
-  for (const d of eligible.slice(1)) {
-    const km = haversineKm(order.fromCoords, d.location);
-    if (km < bestKm) {
-      bestKm = km;
-      best = d;
+  // PostGIS — eng yaqin haydovchi
+  if (order.type === "taxi" || order.type === "delivery" || order.type === "cargo") {
+    const pgHit = await pgFindNearestDriver(order.fromCoords.latitude, order.fromCoords.longitude, order.type);
+    if (pgHit) {
+      const d = db.drivers.find((x) => x.id === pgHit.id);
+      if (d && d.status === "online" && !d.currentOrderId) {
+        best = d;
+        bestKm = pgHit.distanceKm;
+      }
     }
   }
+
+  if (!best) {
+    const eligible = db.drivers.filter(
+      (d) =>
+        d.status === "online" &&
+        !d.currentOrderId &&
+        (d.serviceTypes.includes(order.type as "taxi" | "delivery" | "cargo") ||
+          order.type === "parking" ||
+          order.type === "ev_charge")
+    );
+    if (!eligible.length) return null;
+
+    best = eligible[0];
+    bestKm = haversineKm(order.fromCoords, best.location);
+    for (const d of eligible.slice(1)) {
+      const km = haversineKm(order.fromCoords, d.location);
+      if (km < bestKm) {
+        bestKm = km;
+        best = d;
+      }
+    }
+  }
+
+  if (!best) return null;
 
   order.driverId = best.id;
   order.status = "dispatched";
@@ -166,6 +185,7 @@ export function dispatchNearestDriver(orderId: string): { order: OrderRecord; dr
   best.currentOrderId = order.id;
 
   saveDb(db);
+  publishEvent({ type: "order_updated", orderId: order.id, payload: order });
   return { order, driver: best };
 }
 
@@ -197,8 +217,12 @@ export function driverUpdateLocation(driverId: string, location: GeoPoint, order
       }
       order.updatedAt = new Date().toISOString();
       saveDb(db);
+      publishEvent({ type: "driver_location", driverId, payload: { location, orderId } });
+      publishEvent({ type: "order_updated", orderId, payload: order });
     }
   }
+
+  publishEvent({ type: "driver_location", driverId, payload: { location } });
 
   return driver;
 }

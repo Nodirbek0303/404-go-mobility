@@ -12,7 +12,10 @@ import {
   updateOrder,
 } from "../store/database";
 import type { GeoPoint, OrderRecord, PaymentProviderType } from "../store/types";
-import { geocodeGoogle, getGoogleMapsKey } from "../google/geocode";
+import { geocodeNominatim } from "../osm/nominatim";
+import { getOsrmRoute } from "../osm/osrm";
+import { isRedisConfigured } from "../cache/redis";
+import { isPostgresEnabled, pgHealthCheck } from "../db/postgres";
 import { confirmSandboxPayment, getPaymentConfig, initiatePayment } from "../payments/service";
 
 function json(res: Response, status: number, body: unknown) {
@@ -26,9 +29,15 @@ function mapProvider(p: string): PaymentProviderType {
 }
 
 export async function handlePlatformConfig(_req: Request, res: Response) {
+  const pgOk = isPostgresEnabled() ? await pgHealthCheck() : false;
   json(res, 200, {
-    googleMaps: !!getGoogleMapsKey(),
-    googleMapsKey: getGoogleMapsKey(),
+    stack: "open-source",
+    map: { provider: "OpenStreetMap", renderer: "MapLibre GL" },
+    geocode: { provider: "Nominatim" },
+    routing: { provider: "OSRM" },
+    postgres: pgOk,
+    redis: isRedisConfigured(),
+    firebase: !!process.env.VITE_FIREBASE_API_KEY,
     payments: getPaymentConfig(),
   });
 }
@@ -39,7 +48,7 @@ export async function handleGeocode(req: Request, res: Response) {
   const lon = Number(req.query.lon) || 69.2797;
   if (!q.trim()) return json(res, 400, { error: "q required" });
   try {
-    const results = await geocodeGoogle(q, lat, lon);
+    const results = await geocodeNominatim(q, lat, lon);
     json(res, 200, { results });
   } catch (e: unknown) {
     json(res, 500, { error: e instanceof Error ? e.message : "Geocode failed" });
@@ -80,7 +89,7 @@ export async function handleOrderCreate(req: Request, res: Response) {
 
 export async function handleOrderDispatch(req: Request, res: Response) {
   const id = String(req.params.id);
-  const result = dispatchNearestDriver(id);
+  const result = await dispatchNearestDriver(id);
   if (!result) return json(res, 404, { error: "No available driver" });
 
   if (req.body?.autoAccept !== false) {
@@ -180,4 +189,41 @@ export async function handlePaymentConfirm(req: Request, res: Response) {
 
 export async function handlePaymentConfig(_req: Request, res: Response) {
   json(res, 200, getPaymentConfig());
+}
+
+export async function handleRoute(req: Request, res: Response) {
+  const fromLat = Number(req.query.fromLat);
+  const fromLon = Number(req.query.fromLon);
+  const toLat = Number(req.query.toLat);
+  const toLon = Number(req.query.toLon);
+  if (![fromLat, fromLon, toLat, toLon].every(Number.isFinite)) {
+    return json(res, 400, { error: "fromLat, fromLon, toLat, toLon required" });
+  }
+  try {
+    const route = await getOsrmRoute(fromLat, fromLon, toLat, toLon);
+    json(res, 200, { route });
+  } catch (e: unknown) {
+    json(res, 500, { error: e instanceof Error ? e.message : "Route failed" });
+  }
+}
+
+/** SSE — real-time buyurtma kuzatuvi (Vercel + local) */
+export async function handleRealtimeSSE(req: Request, res: Response) {
+  const orderId = String(req.query.orderId || "");
+  if (!orderId) return json(res, 400, { error: "orderId required" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const send = () => {
+    const order = getOrder(orderId);
+    const driver = order?.driverId ? getDriver(order.driverId) : null;
+    res.write(`data: ${JSON.stringify({ order, driver, ts: Date.now() })}\n\n`);
+  };
+
+  send();
+  const interval = setInterval(send, 3000);
+  req.on("close", () => clearInterval(interval));
 }

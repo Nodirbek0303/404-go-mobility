@@ -14,9 +14,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface PlatformConfig {
-  googleMaps: boolean;
-  googleMapsKey: string | null;
+  stack: string;
+  map: { provider: string; renderer: string };
+  geocode: { provider: string };
+  routing: { provider: string };
+  postgres: boolean;
+  redis: boolean;
+  firebase: boolean;
   payments: { payme: boolean; click: boolean; uzum: boolean };
+}
+
+export interface OsrmRoute {
+  distanceKm: number;
+  durationMin: number;
+  geometry: Array<[number, number]>;
 }
 
 export interface PaymentCreateResponse {
@@ -46,6 +57,40 @@ export async function geocodeAddress(query: string, lat?: number, lon?: number):
   if (lon != null) params.set("lon", String(lon));
   const data = await request<{ results: GeocodeHit[] }>(`/api/geocode?${params}`);
   return data.results;
+}
+
+/** OSRM marshrut — aniq masofa va vaqt */
+export async function fetchOsrmRoute(
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number
+): Promise<OsrmRoute> {
+  const params = new URLSearchParams({
+    fromLat: String(fromLat),
+    fromLon: String(fromLon),
+    toLat: String(toLat),
+    toLon: String(toLon),
+  });
+  const data = await request<{ route: OsrmRoute }>(`/api/route?${params}`);
+  return data.route;
+}
+
+/** SSE real-time buyurtma kuzatuvi */
+export function subscribeOrderRealtime(
+  orderId: string,
+  onUpdate: (data: { order: OrderRecord | undefined; driver: DriverRecord | null }) => void
+): () => void {
+  const es = new EventSource(`/api/realtime?orderId=${encodeURIComponent(orderId)}`);
+  es.onmessage = (ev) => {
+    try {
+      const parsed = JSON.parse(ev.data) as { order?: OrderRecord; driver?: DriverRecord | null };
+      onUpdate({ order: parsed.order, driver: parsed.driver ?? null });
+    } catch {
+      /* ignore */
+    }
+  };
+  return () => es.close();
 }
 
 export async function createPlatformOrder(input: {
