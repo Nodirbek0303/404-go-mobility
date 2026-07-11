@@ -1,5 +1,6 @@
 import type { Booking } from "../types";
 import type { DriverRecord, GeoPoint, OrderRecord } from "../../lib/store/types";
+import { loadDriverToken } from "../utils/driverAuthStorage";
 
 const API = "";
 
@@ -13,6 +14,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+async function driverRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = loadDriverToken();
+  if (!token) throw new Error("Driver session required");
+  return request<T>(path, {
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
 export interface PlatformConfig {
   stack: string;
   map: { provider: string; renderer: string };
@@ -22,6 +35,7 @@ export interface PlatformConfig {
   redis: boolean;
   firebase: boolean;
   payments: { payme: boolean; click: boolean; uzum: boolean };
+  driverApiProtected?: boolean;
 }
 
 export interface OsrmRoute {
@@ -149,31 +163,33 @@ export async function confirmSandboxPlatformPayment(paymentId: string): Promise<
   });
 }
 
-export async function listPlatformDrivers(): Promise<DriverRecord[]> {
-  const data = await request<{ drivers: DriverRecord[] }>("/api/drivers");
+export async function listPlatformDrivers(serviceApiKey: string): Promise<DriverRecord[]> {
+  const data = await request<{ drivers: DriverRecord[] }>("/api/drivers", {
+    headers: { Authorization: `Bearer ${serviceApiKey}` },
+  });
   return data.drivers;
 }
 
 export async function getPlatformDriver(driverId: string): Promise<{ driver: DriverRecord; order: OrderRecord | null }> {
-  return request(`/api/drivers?id=${encodeURIComponent(driverId)}`);
+  return driverRequest(`/api/drivers?id=${encodeURIComponent(driverId)}`);
 }
 
 export async function setDriverStatus(driverId: string, status: "online" | "offline" | "busy") {
-  return request(`/api/drivers?id=${encodeURIComponent(driverId)}&action=status`, {
+  return driverRequest(`/api/drivers?id=${encodeURIComponent(driverId)}&action=status`, {
     method: "POST",
     body: JSON.stringify({ status }),
   });
 }
 
 export async function driverAcceptPlatformOrder(driverId: string, orderId: string) {
-  return request(`/api/drivers?id=${encodeURIComponent(driverId)}&action=accept`, {
+  return driverRequest(`/api/drivers?id=${encodeURIComponent(driverId)}&action=accept`, {
     method: "POST",
     body: JSON.stringify({ orderId }),
   });
 }
 
 export async function updateDriverPlatformLocation(driverId: string, location: GeoPoint, orderId?: string) {
-  return request(`/api/drivers?id=${encodeURIComponent(driverId)}&action=location`, {
+  return driverRequest(`/api/drivers?id=${encodeURIComponent(driverId)}&action=location`, {
     method: "POST",
     body: JSON.stringify({ location, orderId }),
   });

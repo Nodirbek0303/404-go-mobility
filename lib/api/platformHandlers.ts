@@ -17,6 +17,13 @@ import { getOsrmRoute } from "../osm/osrm";
 import { isRedisConfigured } from "../cache/redis";
 import { isPostgresEnabled, pgHealthCheck } from "../db/postgres";
 import { confirmSandboxPayment, getPaymentConfig, initiatePayment } from "../payments/service";
+import { signDriverToken } from "./driverJwt";
+import {
+  authenticateDriverApi,
+  authenticateServiceKey,
+  isDriverApiProtectionEnabled,
+  phonesMatch,
+} from "./serviceAuth";
 
 function json(res: Response, status: number, body: unknown) {
   res.status(status).json(body);
@@ -39,7 +46,45 @@ export async function handlePlatformConfig(_req: Request, res: Response) {
     redis: isRedisConfigured(),
     firebase: !!process.env.VITE_FIREBASE_API_KEY,
     payments: getPaymentConfig(),
+    driverApiProtected: isDriverApiProtectionEnabled(),
   });
+}
+
+export async function handleDriverAuthLogin(req: Request, res: Response) {
+  const { phone } = req.body as { phone?: string };
+  if (!phone?.trim()) return json(res, 400, { error: "phone required" });
+
+  const drivers = listDrivers();
+  const driver = drivers.find((d) => phonesMatch(d.phone, phone));
+  if (!driver) {
+    return json(res, 404, { error: "Driver not found for this phone number" });
+  }
+
+  const token = signDriverToken(driver.id);
+  json(res, 200, {
+    token,
+    driver: {
+      id: driver.id,
+      firstName: driver.firstName,
+      lastName: driver.lastName,
+      phone: driver.phone,
+      carName: driver.carName,
+      carNumber: driver.carNumber,
+      status: driver.status,
+      rating: driver.rating,
+    },
+  });
+}
+
+export async function handleDriverAuthMe(req: Request, res: Response) {
+  const auth = authenticateDriverApi(req);
+  if (!auth || auth.type !== "driver") {
+    return json(res, 401, { error: "Valid driver session required" });
+  }
+  const driver = getDriver(auth.driverId);
+  if (!driver) return json(res, 404, { error: "Driver not found" });
+  const order = driver.currentOrderId ? getOrder(driver.currentOrderId) : null;
+  json(res, 200, { driver, order });
 }
 
 export async function handleGeocode(req: Request, res: Response) {
@@ -118,12 +163,19 @@ export async function handleOrderPatch(req: Request, res: Response) {
   json(res, 200, { order });
 }
 
-export async function handleDriversList(_req: Request, res: Response) {
+export async function handleDriversList(req: Request, res: Response) {
+  if (!authenticateServiceKey(req)) {
+    return json(res, 401, { error: "Service API key required" });
+  }
   json(res, 200, { drivers: listDrivers() });
 }
 
 export async function handleDriverGet(req: Request, res: Response) {
-  const driver = getDriver(String(req.params.id));
+  const id = String(req.params.id);
+  if (!authenticateDriverApi(req, id)) {
+    return json(res, 401, { error: "Unauthorized — service key or driver session required" });
+  }
+  const driver = getDriver(id);
   if (!driver) return json(res, 404, { error: "Driver not found" });
   const order = driver.currentOrderId ? getOrder(driver.currentOrderId) : null;
   json(res, 200, { driver, order });
@@ -131,6 +183,9 @@ export async function handleDriverGet(req: Request, res: Response) {
 
 export async function handleDriverStatus(req: Request, res: Response) {
   const id = String(req.params.id);
+  if (!authenticateDriverApi(req, id)) {
+    return json(res, 401, { error: "Unauthorized — service key or driver session required" });
+  }
   const { status } = req.body as { status?: string };
   if (!status || !["online", "offline", "busy"].includes(status)) {
     return json(res, 400, { error: "status must be online|offline|busy" });
@@ -142,6 +197,9 @@ export async function handleDriverStatus(req: Request, res: Response) {
 
 export async function handleDriverAccept(req: Request, res: Response) {
   const driverId = String(req.params.id);
+  if (!authenticateDriverApi(req, driverId)) {
+    return json(res, 401, { error: "Unauthorized — service key or driver session required" });
+  }
   const { orderId } = req.body as { orderId?: string };
   if (!orderId) return json(res, 400, { error: "orderId required" });
   const order = driverAcceptOrder(driverId, orderId);
@@ -152,6 +210,9 @@ export async function handleDriverAccept(req: Request, res: Response) {
 
 export async function handleDriverLocation(req: Request, res: Response) {
   const driverId = String(req.params.id);
+  if (!authenticateDriverApi(req, driverId)) {
+    return json(res, 401, { error: "Unauthorized — service key or driver session required" });
+  }
   const { location, orderId } = req.body as { location?: GeoPoint; orderId?: string };
   if (!location?.latitude || !location?.longitude) {
     return json(res, 400, { error: "location required" });

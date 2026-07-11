@@ -1,66 +1,114 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Car, MapPin, Navigation, Phone, Power, User } from "lucide-react";
+import { Car, Navigation, Phone, Power, User } from "lucide-react";
 import type { DriverRecord, GeoPoint, OrderRecord } from "../../../lib/store/types";
 import {
   driverAcceptPlatformOrder,
   getPlatformDriver,
-  listPlatformDrivers,
   setDriverStatus,
   updateDriverPlatformLocation,
 } from "../../services/platformApi";
 import SmartMap from "../maps/SmartMap";
 import RideChatPanel from "../RideChatPanel";
 import { appendRideChat, loadRideChat, nowChatTime } from "../../utils/rideChatStorage";
+import {
+  clearDriverToken,
+  fetchDriverSession,
+  loadDriverToken,
+  loginDriverByPhone,
+} from "../../utils/driverAuthStorage";
 
 interface DriverPortalProps {
   lang: "uz" | "en" | "ru";
   onClose?: () => void;
 }
 
-const DRIVER_STORAGE_KEY = "404GO_DRIVER_ID";
-
 export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
-  const [drivers, setDrivers] = useState<DriverRecord[]>([]);
-  const [selectedId, setSelectedId] = useState<string>(() => localStorage.getItem(DRIVER_STORAGE_KEY) || "");
+  const [phone, setPhone] = useState("");
   const [driver, setDriver] = useState<DriverRecord | null>(null);
   const [order, setOrder] = useState<OrderRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
   const geoRef = useRef<number | null>(null);
 
   const t = {
     title: lang === "uz" ? "Haydovchi portali" : lang === "ru" ? "Портал водителя" : "Driver portal",
-    select: lang === "uz" ? "Haydovchini tanlang" : lang === "ru" ? "Выберите водителя" : "Select driver",
+    login: lang === "uz" ? "Kirish" : lang === "ru" ? "Войти" : "Sign in",
+    phone: lang === "uz" ? "Ro'yxatdagi telefon raqamingiz" : lang === "ru" ? "Ваш номер в системе" : "Your registered phone",
     online: lang === "uz" ? "Onlayn" : lang === "ru" ? "Онлайн" : "Online",
     offline: lang === "uz" ? "Oflayn" : lang === "ru" ? "Оффлайн" : "Offline",
     accept: lang === "uz" ? "Qabul qilish" : lang === "ru" ? "Принять" : "Accept",
     noOrder: lang === "uz" ? "Faol buyurtma yo'q" : lang === "ru" ? "Нет активного заказа" : "No active order",
     network: lang === "uz" ? "404-GO haydovchi tarmog'i" : lang === "ru" ? "Сеть водителей 404-GO" : "404-GO driver network",
+    logout: lang === "uz" ? "Chiqish" : lang === "ru" ? "Выйти" : "Sign out",
+    loginHint:
+      lang === "uz"
+        ? "Tizimga kiritilgan telefon raqamingizni kiriting"
+        : lang === "ru"
+          ? "Введите номер, указанный в системе"
+          : "Enter the phone number registered in the system",
   };
 
   useEffect(() => {
-    listPlatformDrivers()
-      .then(setDrivers)
-      .catch(() => setDrivers([]))
-      .finally(() => setLoading(false));
+    const boot = async () => {
+      if (!loadDriverToken()) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const session = await fetchDriverSession();
+        if (session) {
+          setDriver(session.driver);
+          setOrder(session.order);
+        }
+      } catch {
+        clearDriverToken();
+      } finally {
+        setLoading(false);
+      }
+    };
+    boot();
   }, []);
 
   useEffect(() => {
-    if (!selectedId) return;
-    localStorage.setItem(DRIVER_STORAGE_KEY, selectedId);
+    if (!driver) return;
     refreshDriver();
     const interval = window.setInterval(refreshDriver, 4000);
     return () => clearInterval(interval);
-  }, [selectedId]);
+  }, [driver?.id]);
 
   const refreshDriver = async () => {
-    if (!selectedId) return;
+    if (!driver) return;
     try {
-      const data = await getPlatformDriver(selectedId);
+      const data = await getPlatformDriver(driver.id);
       setDriver(data.driver);
       setOrder(data.order);
     } catch {
       /* ignore */
     }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoginLoading(true);
+    try {
+      const result = await loginDriverByPhone(phone.trim());
+      const data = await getPlatformDriver(result.driver.id);
+      setDriver(data.driver);
+      setOrder(data.order);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    clearDriverToken();
+    setDriver(null);
+    setOrder(null);
+    setPhone("");
   };
 
   const toggleOnline = async () => {
@@ -142,34 +190,41 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-lg mx-auto w-full">
-        {!selectedId ? (
-          <div className="space-y-2">
-            <p className="text-sm text-gray-400">{t.select}</p>
-            {drivers.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => setSelectedId(d.id)}
-                className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-800 bg-slate-900 hover:border-teal-500/40 text-left"
-              >
-                <div className="w-10 h-10 rounded-full bg-teal-500/20 flex items-center justify-center">
-                  <User className="w-5 h-5 text-teal-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-white">{d.firstName} {d.lastName}</p>
-                  <p className="text-xs text-gray-400">{d.carName} · {d.carNumber}</p>
-                  <p className="text-[10px] text-teal-400">{d.serviceTypes.join(", ")} · ★ {d.rating}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-        ) : driver ? (
+        {!driver ? (
+          <form onSubmit={handleLogin} className="space-y-4 pt-8">
+            <p className="text-sm text-gray-400 text-center">{t.loginHint}</p>
+            <label className="block space-y-1">
+              <span className="text-xs text-gray-500">{t.phone}</span>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+998 90 123 45 67"
+                className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-white text-sm"
+                required
+              />
+            </label>
+            {loginError && <p className="text-xs text-red-400 text-center">{loginError}</p>}
+            <button
+              type="submit"
+              disabled={loginLoading || !phone.trim()}
+              className="w-full py-3 rounded-xl bg-teal-400 text-slate-950 font-bold text-sm disabled:opacity-50"
+            >
+              {loginLoading ? "..." : t.login}
+            </button>
+          </form>
+        ) : (
           <>
             <div className="nexgo-card p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-bold text-white">{driver.firstName} {driver.lastName}</p>
-                  <p className="text-xs text-gray-400">{driver.carName} · {driver.carNumber}</p>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-teal-500/20 flex items-center justify-center">
+                    <User className="w-5 h-5 text-teal-400" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-white">{driver.firstName} {driver.lastName}</p>
+                    <p className="text-xs text-gray-400">{driver.carName} · {driver.carNumber}</p>
+                  </div>
                 </div>
                 <span className={`text-[10px] px-2 py-0.5 rounded-full ${driver.status === "online" ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-800 text-gray-400"}`}>
                   {driver.status}
@@ -241,32 +296,11 @@ export default function DriverPortal({ lang, onClose }: DriverPortalProps) {
               />
             )}
 
-            <div className="nexgo-card p-4 space-y-2 border-blue-500/20">
-              <p className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">
-                {lang === "uz" ? "Haftalik daromad" : lang === "ru" ? "Недельный доход" : "Weekly earnings"}
-              </p>
-              <div className="flex items-end gap-1.5 h-16">
-                {[35, 55, 42, 70, 48, 85, 62].map((h, i) => (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
-                    <div className="w-full rounded-t bg-blue-500/70" style={{ height: `${h}%` }} />
-                    <span className="text-[7px] text-gray-500">{["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"][i]}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="text-sm font-mono font-bold text-white">
-                {(order?.price ? order.price * 3.2 : 285000).toLocaleString()} so'm
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => { setSelectedId(""); localStorage.removeItem(DRIVER_STORAGE_KEY); }}
-              className="text-xs text-gray-500 underline"
-            >
-              {t.select}
+            <button type="button" onClick={handleLogout} className="text-xs text-gray-500 underline w-full text-center">
+              {t.logout}
             </button>
           </>
-        ) : null}
+        )}
       </div>
     </div>
   );

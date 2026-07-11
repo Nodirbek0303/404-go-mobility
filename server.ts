@@ -113,6 +113,8 @@ export async function createApp(options: { apiOnly?: boolean } = {}) {
     handleDriverStatus,
     handleDriverAccept,
     handleDriverLocation,
+    handleDriverAuthLogin,
+    handleDriverAuthMe,
     handlePaymentCreate,
     handlePaymentConfirm,
     handlePaymentConfig,
@@ -137,6 +139,15 @@ export async function createApp(options: { apiOnly?: boolean } = {}) {
   app.post("/api/drivers/:id/status", handleDriverStatus);
   app.post("/api/drivers/:id/accept", handleDriverAccept);
   app.post("/api/drivers/:id/location", handleDriverLocation);
+
+  app.post("/api/driver-auth", (req, res) => {
+    if (req.query.action === "login") return handleDriverAuthLogin(req, res);
+    res.status(405).json({ error: "Method not allowed" });
+  });
+  app.get("/api/driver-auth", (req, res) => {
+    if (req.query.action === "me") return handleDriverAuthMe(req, res);
+    res.status(405).json({ error: "Method not allowed" });
+  });
 
   app.get("/api/payments/config", handlePaymentConfig);
   app.post("/api/payments/create", handlePaymentCreate);
