@@ -1,6 +1,5 @@
 import { Booking, Language } from "../types";
-
-const RATE_PER_KM = 2500; // so'm / km — haydovchi bosib kelgan masofa
+import { CANCEL_RATE_PER_KM, driverTraveledKm, getOrderDistanceKm } from "./geoCalc";
 
 export interface CancelFeeResult {
   fee: number;
@@ -10,7 +9,10 @@ export interface CancelFeeResult {
 
 export function calculateCancelFee(order: Booking): CancelFeeResult {
   const phase = order.ridePhase ?? "searching";
-  const distanceKm = order.driverDistanceKm ?? 0;
+  const distanceKm =
+    order.driverStartCoords && order.driverCoords
+      ? driverTraveledKm(order.driverStartCoords, order.driverCoords)
+      : order.driverDistanceKm ?? 0;
   const price = order.price;
 
   if (order.status !== "active") {
@@ -23,11 +25,11 @@ export function calculateCancelFee(order: Booking): CancelFeeResult {
       return { fee: 0, distanceKm: 0, freeCancel: true };
     }
     if (phase === "accepted") {
-      const fee = Math.max(5000, Math.round(distanceKm * RATE_PER_KM));
+      const fee = Math.max(5000, Math.round(distanceKm * CANCEL_RATE_PER_KM));
       return { fee: Math.min(fee, Math.round(price * 0.25)), distanceKm, freeCancel: false };
     }
     if (phase === "arriving") {
-      const fee = Math.round(distanceKm * RATE_PER_KM);
+      const fee = Math.round(distanceKm * CANCEL_RATE_PER_KM);
       return {
         fee: Math.min(Math.max(fee, 8000), Math.round(price * 0.5)),
         distanceKm,
@@ -36,16 +38,15 @@ export function calculateCancelFee(order: Booking): CancelFeeResult {
     }
     // in_ride — safar boshlangan
     return {
-      fee: Math.min(Math.max(Math.round(distanceKm * RATE_PER_KM), Math.round(price * 0.35)), price),
+      fee: Math.min(Math.max(Math.round(distanceKm * CANCEL_RATE_PER_KM), Math.round(price * 0.35)), price),
       distanceKm,
       freeCancel: false,
     };
   }
 
-  // Yetkazib berish / yuk — kuryer tayinlangan bo'lsa
   if ((order.type === "delivery" || order.type === "cargo") && order.driverName) {
-    const km = distanceKm || 1.5;
-    const fee = Math.min(Math.max(Math.round(km * RATE_PER_KM), 10000), Math.round(price * 0.4));
+    const km = distanceKm > 0 ? distanceKm : getOrderDistanceKm(order) * 0.15;
+    const fee = Math.min(Math.max(Math.round(km * CANCEL_RATE_PER_KM), 10000), Math.round(price * 0.4));
     return { fee, distanceKm: km, freeCancel: false };
   }
 
@@ -60,7 +61,7 @@ export function cancelFeeLabel(result: CancelFeeResult, lang: Language): string 
         ? "Бесплатная отмена"
         : "Free cancellation";
   }
-  const km = result.distanceKm.toFixed(1);
+  const km = result.distanceKm.toFixed(2);
   if (lang === "uz") {
     return `Haydovchi ${km} km bosib keldi · ${result.fee.toLocaleString()} so'm yechiladi`;
   }
@@ -78,7 +79,7 @@ export function cancelConfirmMessage(result: CancelFeeResult, lang: Language): s
         ? "Отменить заказ?"
         : "Cancel this order?";
   }
-  const km = result.distanceKm.toFixed(1);
+  const km = result.distanceKm.toFixed(2);
   if (lang === "uz") {
     return `Haydovchi ${km} km yo'l bosib keldi.\n\nBekor qilsangiz ${result.fee.toLocaleString()} so'm avtomatik yechiladi.\n\nDavom etasizmi?`;
   }

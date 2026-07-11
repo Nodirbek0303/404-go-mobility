@@ -93,6 +93,14 @@ import {
   cancelSuccessMessage,
   cancelFeeLabel,
 } from "./utils/cancelFee";
+import {
+  computeRouteMetrics,
+  displayOrderDistance,
+  displayOrderDuration,
+  formatDistance,
+  formatDuration,
+  remainingToPickupMeters,
+} from "./utils/geoCalc";
 
 type BookingType = Booking["type"];
 const SINGLE_LOCATION_SERVICES = ["parking", "ev_charge"];
@@ -347,44 +355,45 @@ export default function App() {
   // 'Notify when near' simulation states
   const [notifyWhenNear, setNotifyWhenNear] = useState<boolean>(false);
   const [nearAlertBanner, setNearAlertBanner] = useState<string | null>(null);
-  const [simulatedDistance, setSimulatedDistance] = useState<number | null>(null);
+  const [driverDistanceMeters, setDriverDistanceMeters] = useState<number | null>(null);
 
-  // 'Notify when near' simulation logic
+  // Yaqinlashganda bildirish — GPS asosida aniq masofa
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-    if (notifyWhenNear && selectedOrder && selectedOrder.status === "active") {
-      setSimulatedDistance(1200); // Start at 1.2 km
+    if (!notifyWhenNear || !selectedOrder || selectedOrder.status !== "active") {
+      setDriverDistanceMeters(null);
       setNearAlertBanner(null);
-
-      interval = setInterval(() => {
-        setSimulatedDistance(prev => {
-          if (prev === null) return null;
-          if (prev <= 500) {
-            if (interval) clearInterval(interval);
-            // Trigger near alert
-            const driverName = selectedOrder.driverName || "Azizbek";
-            const msg = lang === "uz"
-              ? `${driverName} yaqinlashmoqda! Haydovchi sizdan 450 metr uzoqlikda. Iltimos, tayyor turing!`
-              : lang === "ru"
-                ? `${driverName} приближается! Водитель в 450 метрах от вас. Пожалуйста, будьте готовы!`
-                : `${driverName} is near! The driver is 450 meters away. Please be ready!`;
-            
-            setNearAlertBanner(`🔔 ${msg}`);
-            speakText(msg);
-            return 450;
-          }
-          return prev - 250;
-        });
-      }, 2000);
-    } else {
-      setSimulatedDistance(null);
-      setNearAlertBanner(null);
+      return;
     }
 
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [notifyWhenNear, selectedOrder?.id, selectedOrder?.status, lang]);
+    const meters = remainingToPickupMeters(selectedOrder.driverCoords, selectedOrder.fromCoords);
+    if (meters == null) {
+      setDriverDistanceMeters(null);
+      return;
+    }
+
+    setDriverDistanceMeters(meters);
+
+    if (meters <= 500 && !nearAlertBanner) {
+      const driverName = selectedOrder.driverName || "Haydovchi";
+      const msg =
+        lang === "uz"
+          ? `${driverName} yaqinlashmoqda! Sizdan ${meters} metr uzoqlikda.`
+          : lang === "ru"
+            ? `${driverName} приближается! ${meters} метров от вас.`
+            : `${driverName} is near! ${meters} meters away.`;
+      setNearAlertBanner(`🔔 ${msg}`);
+      speakText(msg);
+    }
+  }, [
+    notifyWhenNear,
+    selectedOrder?.id,
+    selectedOrder?.status,
+    selectedOrder?.driverCoords,
+    selectedOrder?.fromCoords,
+    selectedOrder?.driverName,
+    lang,
+    nearAlertBanner,
+  ]);
 
 
   // Transit route tool
@@ -733,12 +742,39 @@ export default function App() {
     const parkingLot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
     const evStation = EV_STATIONS.find((s) => s.id === selectedEvStationId);
 
+    const fromCoordsFinal = pendingBooking.fromCoords ?? customFromCoords ?? undefined;
+    const toCoordsFinal = pendingBooking.toCoords ?? customToCoords ?? undefined;
+    const routeMetrics = computeRouteMetrics(
+      fromCoordsFinal ?? null,
+      SINGLE_LOCATION_SERVICES.includes(pendingBooking.type) ? null : toCoordsFinal ?? null,
+      pendingBooking.type,
+      {
+        vehicleMultiplier: deliveryVehicle?.priceMultiplier,
+        parcelAdd: parcel?.priceAdd,
+        truckMultiplier: cargoTruck?.priceMultiplier,
+        weightTon: parseFloat(cargoWeightTon) || 1.5,
+        truckCapacityTon: cargoTruck?.capacityTon,
+        parkingHourly: parkingLot?.pricePerHour,
+        ev30Min: evStation?.pricePer30Min,
+      }
+    );
+
+    const ASSIGNED_DRIVERS = [
+      { driverName: "Sardor Alimov", carName: "BYD Song Plus", carNumber: "01 A 777 AA", rating: 4.92, trips: 1847 },
+      { driverName: "Rustam Pozilov", carName: "Chevrolet Onix", carNumber: "01 D 345 AB", rating: 4.88, trips: 2156 },
+      { driverName: "Dina Ahmedova", carName: "Kia K5", carNumber: "01 B 123 AB", rating: 4.95, trips: 987 },
+      { driverName: "Aleksey Smirnov", carName: "Tesla Model 3", carNumber: "01 M 888 MA", rating: 4.91, trips: 1432 },
+    ];
+    const driverPick = ASSIGNED_DRIVERS[(pendingBooking.from?.length ?? 0) % ASSIGNED_DRIVERS.length];
+
     const serviceDriverInfo = (() => {
       if (pendingBooking.type === "cargo" && cargoTruck) {
         return {
           driverName: "Yuk haydovchisi",
           carName: localizedName(cargoTruck, lang),
           carNumber: cargoTruck.plate,
+          rating: 4.86,
+          trips: 620,
         };
       }
       if (pendingBooking.type === "delivery" && deliveryVehicle) {
@@ -746,6 +782,8 @@ export default function App() {
           driverName: "Kuryer",
           carName: `${localizedName(deliveryVehicle, lang)} · ${parcel ? localizedName(parcel, lang) : "Pochta"}`,
           carNumber: deliveryVehicle.plate,
+          rating: 4.89,
+          trips: 1104,
         };
       }
       if (pendingBooking.type === "parking" && parkingLot) {
@@ -753,6 +791,8 @@ export default function App() {
           driverName: "Smart Parking",
           carName: localizedName(parkingLot, lang),
           carNumber: `${parkingLot.freeSpots}/${parkingLot.spots} joy`,
+          rating: 5,
+          trips: 0,
         };
       }
       if (pendingBooking.type === "ev_charge" && evStation) {
@@ -760,19 +800,11 @@ export default function App() {
           driverName: "EV Station",
           carName: localizedName(evStation, lang),
           carNumber: `${evStation.connectors} · ${evStation.powerKw}kW`,
+          rating: 5,
+          trips: 0,
         };
       }
-      return {
-        driverName: ["Sardor Alimov", "Rustam Pozilov", "Dina Ahmedova", "Aleksey Smirnov"][
-          Math.floor(Math.random() * 4)
-        ],
-        carName: ["BYD Song Plus", "Chevrolet Onix", "Kia K5", "Tesla Model 3"][
-          Math.floor(Math.random() * 4)
-        ],
-        carNumber: ["01 A 777 AA", "01 D 345 AB", "01 B 123 AB", "01 M 888 MA"][
-          Math.floor(Math.random() * 4)
-        ],
-      };
+      return driverPick;
     })();
 
     const statusForType = () => {
@@ -801,6 +833,8 @@ export default function App() {
         ru: pendingBooking.subtitle,
       },
       price: pendingBooking.price,
+      tripDistanceKm: routeMetrics.distanceKm,
+      tripDurationMin: routeMetrics.durationMin,
       date: isScheduled
         ? new Date(scheduledDateTime).toLocaleString(lang === "ru" ? "ru-RU" : lang === "en" ? "en-US" : "uz-UZ")
         : "Hozirgina",
@@ -808,12 +842,12 @@ export default function App() {
       statusText: isScheduled ? scheduledStatus : statusForType(),
       from: pendingBooking.from,
       to: pendingBooking.to,
-      fromCoords: pendingBooking.fromCoords ?? customFromCoords ?? undefined,
-      toCoords: pendingBooking.toCoords ?? customToCoords ?? undefined,
+      fromCoords: fromCoordsFinal,
+      toCoords: toCoordsFinal,
       scheduledAt: isScheduled ? scheduledDateTime : undefined,
       paymentProvider,
       driverPhone: "+998901234567",
-      driverTrips: Math.floor(800 + Math.random() * 3200),
+      driverTrips: serviceDriverInfo.trips ?? 0,
       driverVerified: true,
       ...(isTaxi && !isScheduled
         ? {
@@ -825,11 +859,19 @@ export default function App() {
               driverName: serviceDriverInfo.driverName,
               carName: serviceDriverInfo.carName,
               carNumber: serviceDriverInfo.carNumber,
-              rating: parseFloat((4.7 + Math.random() * 0.3).toFixed(2)),
-              duration: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "1 soat" : "18 daqiqa",
-              distance: pendingBooking.type === "parking" || pendingBooking.type === "ev_charge" ? "—" : "12.4 km",
+              rating: serviceDriverInfo.rating ?? 4.9,
+              duration:
+                pendingBooking.type === "parking" || pendingBooking.type === "ev_charge"
+                  ? formatDuration(60, lang)
+                  : formatDuration(routeMetrics.durationMin, lang),
+              distance:
+                pendingBooking.type === "parking" || pendingBooking.type === "ev_charge"
+                  ? "—"
+                  : formatDistance(routeMetrics.distanceKm, lang),
               driverDistanceKm:
-                pendingBooking.type === "delivery" || pendingBooking.type === "cargo" ? 1.2 : undefined,
+                pendingBooking.type === "delivery" || pendingBooking.type === "cargo"
+                  ? Math.round(routeMetrics.distanceKm * 0.12 * 100) / 100
+                  : undefined,
             }
           : {}),
     };
@@ -1301,38 +1343,35 @@ export default function App() {
   };
 
   // Get dynamic calculated price with coupon applied
+  const getRouteMetrics = () => {
+    const serviceType = directBookingService || "taxi";
+    const vehicle = DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle);
+    const parcel = PARCEL_TYPES.find((p) => p.id === selectedParcelType);
+    const truck = CARGO_TRUCKS.find((tr) => tr.id === selectedCargoTruck);
+    const lot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
+    const st = EV_STATIONS.find((s) => s.id === selectedEvStationId);
+
+    return computeRouteMetrics(
+      customFromCoords,
+      SINGLE_LOCATION_SERVICES.includes(serviceType) ? null : customToCoords,
+      serviceType,
+      {
+        vehicleMultiplier: vehicle?.priceMultiplier,
+        parcelAdd: parcel?.priceAdd,
+        truckMultiplier: truck?.priceMultiplier,
+        weightTon: parseFloat(cargoWeightTon) || 1.5,
+        truckCapacityTon: truck?.capacityTon,
+        parkingHourly: lot?.pricePerHour,
+        ev30Min: st?.pricePer30Min,
+      }
+    );
+  };
+
   const getCalculatedPrice = () => {
-    let base = 12000;
-    if (directBookingService === "delivery") {
-      const vehicle = DELIVERY_VEHICLES.find((v) => v.id === selectedDeliveryVehicle);
-      const parcel = PARCEL_TYPES.find((p) => p.id === selectedParcelType);
-      base = Math.round(9000 * (vehicle?.priceMultiplier ?? 1) + (parcel?.priceAdd ?? 0));
-    }
-    if (directBookingService === "cargo") {
-      const truck = CARGO_TRUCKS.find((t) => t.id === selectedCargoTruck);
-      const weight = parseFloat(cargoWeightTon) || 1.5;
-      base = Math.round(180000 * (truck?.priceMultiplier ?? 1) * Math.max(1, weight / (truck?.capacityTon ?? 1.5)));
-    }
-    if (directBookingService === "parking") {
-      const lot = PARKING_LOTS.find((p) => p.id === selectedParkingId);
-      base = lot?.pricePerHour ?? 8000;
-    }
-    if (directBookingService === "ev_charge") {
-      const st = EV_STATIONS.find((s) => s.id === selectedEvStationId);
-      base = st?.pricePer30Min ?? 15000;
-    }
-    
-    let price = base;
-    if (customFromCoords && customToCoords && !SINGLE_LOCATION_SERVICES.includes(directBookingService || "")) {
-      const dist = Math.sqrt(
-        Math.pow(customFromCoords.latitude - customToCoords.latitude, 2) + 
-        Math.pow(customFromCoords.longitude - customToCoords.longitude, 2)
-      ) * 150000;
-      price = Math.max(8000, Math.floor((base + dist) / 1000) * 1000);
-    }
-    
+    let price = getRouteMetrics().price;
+
     if (appliedCouponId) {
-      const coupon = activeCoupons.find(c => c.id === appliedCouponId);
+      const coupon = activeCoupons.find((c) => c.id === appliedCouponId);
       if (coupon) {
         if (coupon.isFlat) {
           price = Math.max(0, price - coupon.discount);
@@ -1341,7 +1380,7 @@ export default function App() {
         }
       }
     }
-    
+
     return price;
   };
 
@@ -2592,10 +2631,29 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Calculated price */}
+                          {/* Aniq narx — GPS masofa bo'yicha */}
+                          {!SINGLE_LOCATION_SERVICES.includes(directBookingService) &&
+                            customFromCoords &&
+                            customToCoords && (
+                              <div className="grid grid-cols-2 gap-2 text-[9px] bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                                <div>
+                                  <span className="text-gray-500">{t.masofa}: </span>
+                                  <span className="text-white font-mono">
+                                    {formatDistance(getRouteMetrics().distanceKm, lang)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">{t.vaqt}: </span>
+                                  <span className="text-white font-mono">
+                                    {formatDuration(getRouteMetrics().durationMin, lang)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
                           <div className="bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-between text-xs mt-1">
                             <span className="text-gray-400 font-medium">
-                              {lang === "uz" ? "Hisoblangan narx:" : lang === "ru" ? "Расчетная стоимость:" : "Estimated Price:"}
+                              {lang === "uz" ? "Aniq narx (GPS):" : lang === "ru" ? "Точная цена (GPS):" : "Exact price (GPS):"}
                             </span>
                             <span className="font-mono font-bold text-teal-400">
                               {getCalculatedPrice().toLocaleString()} so'm
@@ -2907,11 +2965,11 @@ export default function App() {
                           <div className="grid grid-cols-3 gap-2 bg-slate-900 p-2 rounded-lg border border-slate-800 text-center">
                             <div>
                               <p className="text-[8px] text-gray-400">{t.masofa}</p>
-                              <p className="text-[10px] font-semibold text-white mt-0.5">{selectedOrder.distance || "12.4 km"}</p>
+                              <p className="text-[10px] font-semibold text-white mt-0.5">{displayOrderDistance(selectedOrder, lang)}</p>
                             </div>
                             <div>
                               <p className="text-[8px] text-gray-400">{t.vaqt}</p>
-                              <p className="text-[10px] font-semibold text-white mt-0.5">{selectedOrder.duration || "18 min"}</p>
+                              <p className="text-[10px] font-semibold text-white mt-0.5">{displayOrderDuration(selectedOrder, lang)}</p>
                             </div>
                             <div>
                               <p className="text-[8px] text-gray-400">{t.narx}</p>
@@ -3020,22 +3078,23 @@ export default function App() {
                                 </div>
 
                                 {/* Live simulated tracking */}
-                                {notifyWhenNear && simulatedDistance !== null && (
+                                {notifyWhenNear && driverDistanceMeters !== null && (
                                   <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 space-y-1.5 animate-fade-in">
                                     <div className="flex justify-between items-center text-[8px] font-mono">
                                       <span className="text-gray-400">
-                                        {lang === "uz" ? "Simulyatsiya masofasi:" : lang === "ru" ? "Симуляция расстояния:" : "Simulated distance:"}
+                                        {lang === "uz" ? "Aniq masofa (GPS):" : lang === "ru" ? "Точное расстояние (GPS):" : "Exact distance (GPS):"}
                                       </span>
-                                      <span className={`${simulatedDistance <= 500 ? "text-amber-400 font-bold" : "text-teal-400"}`}>
-                                        {simulatedDistance} m
+                                      <span className={`${driverDistanceMeters <= 500 ? "text-amber-400 font-bold" : "text-teal-400"}`}>
+                                        {driverDistanceMeters} m
                                       </span>
                                     </div>
-                                    
-                                    {/* Progress line */}
+
                                     <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
-                                      <div 
-                                        className={`h-full transition-all duration-1000 ${simulatedDistance <= 500 ? "bg-amber-400 animate-pulse" : "bg-teal-400"}`}
-                                        style={{ width: `${Math.max(10, Math.min(100, (1 - simulatedDistance / 1200) * 100))}%` }}
+                                      <div
+                                        className={`h-full transition-all duration-1000 ${driverDistanceMeters <= 500 ? "bg-amber-400 animate-pulse" : "bg-teal-400"}`}
+                                        style={{
+                                          width: `${Math.max(10, Math.min(100, (1 - driverDistanceMeters / Math.max(driverDistanceMeters, 800)) * 100))}%`,
+                                        }}
                                       />
                                     </div>
 

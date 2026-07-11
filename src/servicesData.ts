@@ -1,4 +1,27 @@
 import { ServiceCategory, Booking, TransitRoute } from "./types";
+import { computeRouteMetrics, nearestDriverDepot } from "./utils/geoCalc";
+
+function enrichBooking(order: Booking): Booking {
+  if (!order.fromCoords) return order;
+  const metrics = computeRouteMetrics(order.fromCoords, order.toCoords ?? null, order.type, {});
+  const enriched: Booking = {
+    ...order,
+    tripDistanceKm: metrics.distanceKm,
+    tripDurationMin: metrics.durationMin,
+    distance: order.toCoords ? `${metrics.distanceKm.toFixed(2)} km` : order.distance,
+    duration: order.toCoords ? `${metrics.durationMin} min` : order.duration,
+  };
+  if (order.type === "taxi" && order.ridePhase && order.ridePhase !== "searching" && order.fromCoords) {
+    const { depot, distanceKm } = nearestDriverDepot(order.fromCoords);
+    enriched.driverStartCoords = depot;
+    enriched.dispatchTotalKm = distanceKm;
+    if (order.ridePhase === "arriving") {
+      enriched.driverCoords = depot;
+      enriched.driverDistanceKm = Math.round(distanceKm * 0.55 * 100) / 100;
+    }
+  }
+  return enriched;
+}
 
 export const serviceCategories: ServiceCategory[] = [
   {
@@ -54,7 +77,7 @@ export const serviceCategories: ServiceCategory[] = [
   },
 ];
 
-export const initialOrders: Booking[] = [
+const rawInitialOrders: Booking[] = [
   {
     id: "order-1",
     type: "taxi",
@@ -243,6 +266,8 @@ export const initialOrders: Booking[] = [
     fromCoords: { latitude: 41.3031, longitude: 69.2486 },
   },
 ];
+
+export const initialOrders: Booking[] = rawInitialOrders.map(enrichBooking);
 
 export const transitRoutes: TransitRoute[] = [
   {

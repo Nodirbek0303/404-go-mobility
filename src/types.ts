@@ -59,6 +59,11 @@ export interface Booking {
   paymentProvider?: PaymentProvider;
   driverDistanceKm?: number;
   cancelFee?: number;
+  tripDistanceKm?: number;
+  tripDurationMin?: number;
+  driverCoords?: { latitude: number; longitude: number };
+  driverStartCoords?: { latitude: number; longitude: number };
+  dispatchTotalKm?: number;
 }
 export interface DriverChatMessage {
   id: string;

@@ -8,7 +8,7 @@ interface DriverProfileCardProps {
 }
 
 export default function DriverProfileCard({ lang, order }: DriverProfileCardProps) {
-  const trips = order.driverTrips ?? Math.floor(800 + Math.random() * 3200);
+  const trips = order.driverTrips ?? 0;
   const verified = order.driverVerified ?? true;
   const rating = order.rating ?? 4.85;
 

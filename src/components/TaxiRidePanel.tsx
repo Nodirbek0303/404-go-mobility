@@ -9,6 +9,16 @@ import {
   yandexNavigatorRoute,
 } from "../utils/mapProviders";
 import { calculateCancelFee, cancelFeeLabel } from "../utils/cancelFee";
+import {
+  driverTraveledKm,
+  etaMinutesFromKm,
+  haversineKm,
+  interpolateCoords,
+  kmStepForInterval,
+  nearestDriverDepot,
+} from "../utils/geoCalc";
+
+const DRIVER_TICK_MS = 2000;
 
 const MOCK_DRIVERS = [
   {
@@ -99,9 +109,15 @@ export default function TaxiRidePanel({
           : `Hi! I'm ${driver.firstName} ${driver.lastName}. I accepted your ride and I'm on my way.`;
 
     const t1 = window.setTimeout(() => {
+      const pickup = { latitude: fromLat, longitude: fromLng };
+      const { depot, distanceKm: dispatchKm } = nearestDriverDepot(pickup);
       onUpdateOrder(order.id, {
         ridePhase: "accepted",
-        driverDistanceKm: 0.3,
+        driverStartCoords: depot,
+        driverCoords: depot,
+        dispatchTotalKm: dispatchKm,
+        driverDistanceKm: 0,
+        etaMinutes: etaMinutesFromKm(dispatchKm),
         driverFirstName: driver.firstName,
         driverLastName: driver.lastName,
         driverName: `${driver.firstName} ${driver.lastName}`,
@@ -109,7 +125,6 @@ export default function TaxiRidePanel({
         carName: driver.carName,
         carNumber: driver.carNumber,
         rating: driver.rating,
-        etaMinutes: 8,
         driverChat: [
           {
             id: `drv-${Date.now()}`,
@@ -122,11 +137,11 @@ export default function TaxiRidePanel({
     }, 2500);
 
     const t2 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "arriving", etaMinutes: 6, driverDistanceKm: 1.8 });
+      onUpdateOrder(order.id, { ridePhase: "arriving" });
     }, 5000);
 
     const t3 = window.setTimeout(() => {
-      onUpdateOrder(order.id, { ridePhase: "in_ride", etaMinutes: 0, driverDistanceKm: 4.2 });
+      onUpdateOrder(order.id, { ridePhase: "in_ride", etaMinutes: 0 });
     }, 14000);
 
     return () => {
@@ -149,23 +164,55 @@ export default function TaxiRidePanel({
     return () => clearInterval(interval);
   }, [phase, order.id, order.etaMinutes, onUpdateOrder]);
 
-  // Haydovchi yo'l bosib kelgan masofani simulyatsiya qilish
+  // Haydovchi GPS bo'yicha aniq harakat (Haversine)
   useEffect(() => {
     if (order.status !== "active" || order.type !== "taxi") return;
-    if (phase === "searching") return;
+    if (phase === "searching" || !order.driverStartCoords) return;
+
+    const pickup = { latitude: fromLat, longitude: fromLng };
+    const dest = { latitude: toLat, longitude: toLng };
+    const kmStep = kmStepForInterval(DRIVER_TICK_MS);
 
     const interval = window.setInterval(() => {
-      const current = order.driverDistanceKm ?? 0;
-      const increment = phase === "in_ride" ? 0.55 : phase === "arriving" ? 0.4 : 0.2;
-      const maxKm = phase === "in_ride" ? 12 : 4.5;
-      if (current >= maxKm) return;
+      const start = order.driverStartCoords!;
+      const current = order.driverCoords ?? start;
+      const target = phase === "in_ride" ? dest : pickup;
+      const legKm = haversineKm(current, target);
+
+      if (legKm < 0.03) return;
+
+      const step = Math.min(kmStep, legKm);
+      const next = interpolateCoords(current, target, step / legKm);
+
+      const traveled =
+        phase === "in_ride"
+          ? (order.dispatchTotalKm ?? 0) + haversineKm(pickup, next)
+          : driverTraveledKm(start, next);
+
+      const remainingKm = haversineKm(next, target);
+
       onUpdateOrder(order.id, {
-        driverDistanceKm: Math.round(Math.min(current + increment, maxKm) * 10) / 10,
+        driverCoords: next,
+        driverDistanceKm: Math.round(traveled * 100) / 100,
+        etaMinutes: phase === "in_ride" ? etaMinutesFromKm(remainingKm) : etaMinutesFromKm(remainingKm),
       });
-    }, 4000);
+    }, DRIVER_TICK_MS);
 
     return () => clearInterval(interval);
-  }, [phase, order.id, order.status, order.type, order.driverDistanceKm, onUpdateOrder]);
+  }, [
+    phase,
+    order.id,
+    order.status,
+    order.type,
+    order.driverStartCoords,
+    order.driverCoords,
+    order.dispatchTotalKm,
+    fromLat,
+    fromLng,
+    toLat,
+    toLng,
+    onUpdateOrder,
+  ]);
 
   const cancelPreview = calculateCancelFee(order);
 
@@ -181,7 +228,7 @@ export default function TaxiRidePanel({
       ? t.taxi_searching
       : phase === "in_ride"
         ? t.taxi_in_ride
-        : `${t.taxi_arriving} · ~${order.etaMinutes ?? "—"} ${t.taxi_minutes}`;
+        : `${t.taxi_arriving} · ${order.etaMinutes ?? "—"} ${t.taxi_minutes}`;
 
   const userFullName =
     [userProfile.firstName, userProfile.lastName].filter(Boolean).join(" ") ||
@@ -310,16 +357,16 @@ export default function TaxiRidePanel({
         </div>
         {phase === "arriving" && order.etaMinutes != null && order.etaMinutes > 0 && (
           <p className="text-[9px] text-center text-teal-400 font-mono animate-pulse">
-            {t.taxi_eta}: ~{order.etaMinutes} {t.taxi_minutes}
+            {t.taxi_eta}: {order.etaMinutes} {t.taxi_minutes}
           </p>
         )}
         {phase !== "searching" && (order.driverDistanceKm ?? 0) > 0 && (
           <p className="text-[8px] text-center text-gray-400 font-mono">
             {lang === "uz"
-              ? `Haydovchi bosib kelgan: ${(order.driverDistanceKm ?? 0).toFixed(1)} km`
+              ? `Haydovchi bosib kelgan: ${(order.driverDistanceKm ?? 0).toFixed(2)} km (GPS)`
               : lang === "ru"
-                ? `Водитель проехал: ${(order.driverDistanceKm ?? 0).toFixed(1)} км`
-                : `Driver traveled: ${(order.driverDistanceKm ?? 0).toFixed(1)} km`}
+                ? `Проехал: ${(order.driverDistanceKm ?? 0).toFixed(2)} км (GPS)`
+                : `Traveled: ${(order.driverDistanceKm ?? 0).toFixed(2)} km (GPS)`}
           </p>
         )}
       </div>
