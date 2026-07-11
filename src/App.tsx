@@ -708,6 +708,19 @@ export default function App() {
         );
         return;
       }
+      // Ikkala nuqta tayyor — yana bosilsa B nuqta yangi joyga ko'chadi
+      if (step === "ready") {
+        setCustomToCoords({ latitude: lat, longitude: lng });
+        setDirectToText(formatMapPointLabel(lat, lng, lang, "B"));
+        speakText(
+          lang === "uz"
+            ? "B nuqta yangi joyga ko'chirildi."
+            : lang === "ru"
+              ? "Точка B перемещена."
+              : "Point B moved."
+        );
+        return;
+      }
       return;
     }
 
@@ -721,6 +734,18 @@ export default function App() {
       setCustomToCoords({ latitude: lat, longitude: lng });
       setPinMode(null);
     }
+  }, [lang]);
+
+  // A/B pinlarini xaritada surib (drag) o'zgartirish
+  const handleFromPinMoved = useCallback((lat: number, lng: number) => {
+    setCustomFromCoords({ latitude: lat, longitude: lng });
+    setDirectFromText(formatMapPointLabel(lat, lng, lang, "A"));
+    setGpsPickupActive(false);
+  }, [lang]);
+
+  const handleToPinMoved = useCallback((lat: number, lng: number) => {
+    setCustomToCoords({ latitude: lat, longitude: lng });
+    setDirectToText(formatMapPointLabel(lat, lng, lang, "B"));
   }, [lang]);
 
   const resolveAddressField = async (field: "from" | "to") => {
@@ -2856,8 +2881,10 @@ export default function App() {
                                         ? "2-qadam: Xaritada B nuqtani bosing — qayerga borasiz"
                                         : "Step 2: Tap point B on the map — your destination"
                                       : lang === "uz"
-                                        ? "Tayyor! Buyurtma berishingiz mumkin"
-                                        : "Ready! You can place your order"}
+                                        ? "Tayyor! A/B pinlarini surib o'zgartirish yoki xaritani bosib B ni ko'chirish mumkin"
+                                        : lang === "ru"
+                                          ? "Готово! Перетащите пины A/B или нажмите на карту, чтобы переместить B"
+                                          : "Ready! Drag the A/B pins or tap the map to move B"}
                                 </p>
                               </div>
 
@@ -2887,6 +2914,8 @@ export default function App() {
                                   customFromCoords={customFromCoords}
                                   customToCoords={customToCoords}
                                   onMapClick={handleMapClick}
+                                  onFromMoved={handleFromPinMoved}
+                                  onToMoved={handleToPinMoved}
                                 />
                               </div>
 
@@ -3057,6 +3086,8 @@ export default function App() {
                                   : customToCoords
                               }
                               onMapClick={handleMapClick}
+                              onFromMoved={handleFromPinMoved}
+                              onToMoved={handleToPinMoved}
                             />
                           </div>
 
@@ -5015,6 +5046,8 @@ export default function App() {
                     : (directBookingService ? customToCoords : null)
                 }
                 onMapClick={directBookingService === "taxi" ? undefined : handleMapClick}
+                onFromMoved={directBookingService && !viewingHistoricalTrip ? handleFromPinMoved : undefined}
+                onToMoved={directBookingService && !viewingHistoricalTrip ? handleToPinMoved : undefined}
               />
             </div>
           </div>

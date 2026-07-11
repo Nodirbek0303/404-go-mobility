@@ -9,6 +9,10 @@ type MapProps = React.ComponentProps<typeof MapComponent> & {
   compact?: boolean;
   /** Taksi tanlash kabi interaktiv oqimlarda barqaror canvas xarita */
   interactive?: boolean;
+  /** A nuqta pinini surganda */
+  onFromMoved?: (lat: number, lng: number) => void;
+  /** B nuqta pinini surganda */
+  onToMoved?: (lat: number, lng: number) => void;
 };
 
 export default function SmartMap({
@@ -17,6 +21,8 @@ export default function SmartMap({
   liveUserCoords,
   etaMinutes,
   driverCoords,
+  onFromMoved,
+  onToMoved,
   ...props
 }: MapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -45,6 +51,8 @@ export default function SmartMap({
       driverName={props.driverName}
       showRoute={props.showRoute}
       onMapClick={props.onMapClick}
+      onFromMoved={onFromMoved}
+      onToMoved={onToMoved}
       customFromCoords={props.customFromCoords}
       customToCoords={props.customToCoords}
       driverCoords={driverCoords}

@@ -30,6 +30,10 @@ interface MapLibreProps {
   driverName?: string;
   showRoute?: boolean;
   onMapClick?: (lat: number, lng: number, name: string) => void;
+  /** A nuqta surilganda (drag) chaqiriladi */
+  onFromMoved?: (lat: number, lng: number) => void;
+  /** B nuqta surilganda (drag) chaqiriladi */
+  onToMoved?: (lat: number, lng: number) => void;
   customFromCoords?: { latitude: number; longitude: number } | null;
   customToCoords?: { latitude: number; longitude: number } | null;
   driverCoords?: { latitude: number; longitude: number } | null;
@@ -53,12 +57,36 @@ function makeDot(color: string, label: string) {
   return el;
 }
 
+function makePin(color: string, letter: string, label: string) {
+  const el = document.createElement("div");
+  el.style.width = "26px";
+  el.style.height = "26px";
+  el.style.borderRadius = "50%";
+  el.style.background = color;
+  el.style.border = "3px solid white";
+  el.style.boxShadow = "0 2px 10px rgba(0,0,0,0.55)";
+  el.style.cursor = "grab";
+  el.style.display = "flex";
+  el.style.alignItems = "center";
+  el.style.justifyContent = "center";
+  el.style.color = "#0f172a";
+  el.style.fontWeight = "800";
+  el.style.fontSize = "12px";
+  el.style.fontFamily = "sans-serif";
+  el.style.userSelect = "none";
+  el.textContent = letter;
+  el.title = label;
+  return el;
+}
+
 export default function MapLibre({
   activeFrom = "A",
   activeTo = "B",
   driverName = "Haydovchi",
   showRoute = false,
   onMapClick,
+  onFromMoved,
+  onToMoved,
   customFromCoords,
   customToCoords,
   driverCoords,
@@ -72,14 +100,19 @@ export default function MapLibre({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Partial<Record<"from" | "to" | "driver" | "user", maplibregl.Marker>>>({});
   const onMapClickRef = useRef(onMapClick);
+  const onFromMovedRef = useRef(onFromMoved);
+  const onToMovedRef = useRef(onToMoved);
   const onFailedRef = useRef(onFailed);
   const loadedRef = useRef(false);
   const failedRef = useRef(false);
   const lastViewKeyRef = useRef("");
+  const skipNextFitRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [ready, setReady] = useState(false);
 
   onMapClickRef.current = onMapClick;
+  onFromMovedRef.current = onFromMoved;
+  onToMovedRef.current = onToMoved;
   onFailedRef.current = onFailed;
 
   // Xaritani faqat bir marta yaratish
@@ -172,9 +205,38 @@ export default function MapLibre({
       const lngLat: [number, number] = [coords.longitude, coords.latitude];
       const existing = markersRef.current[key];
       if (existing) {
-        existing.setLngLat(lngLat);
+        // Drag paytida marker pozitsiyasini qayta yozmaslik
+        if (!(existing as unknown as { _isDragging?: boolean })._isDragging) {
+          existing.setLngLat(lngLat);
+        }
         return;
       }
+
+      // A va B nuqtalar suriladigan (draggable) pin
+      if (key === "from" || key === "to") {
+        const letter = key === "from" ? "A" : "B";
+        const marker = new maplibregl.Marker({
+          element: makePin(color, letter, label),
+          draggable: true,
+        })
+          .setLngLat(lngLat)
+          .addTo(map);
+
+        marker.on("dragstart", () => {
+          (marker as unknown as { _isDragging?: boolean })._isDragging = true;
+        });
+        marker.on("dragend", () => {
+          (marker as unknown as { _isDragging?: boolean })._isDragging = false;
+          skipNextFitRef.current = true;
+          const pos = marker.getLngLat();
+          if (key === "from") onFromMovedRef.current?.(pos.lat, pos.lng);
+          else onToMovedRef.current?.(pos.lat, pos.lng);
+        });
+
+        markersRef.current[key] = marker;
+        return;
+      }
+
       markersRef.current[key] = new maplibregl.Marker({ element: makeDot(color, label) })
         .setLngLat(lngLat)
         .addTo(map);
@@ -203,6 +265,12 @@ export default function MapLibre({
 
     if (viewKey === lastViewKeyRef.current) return;
     lastViewKeyRef.current = viewKey;
+
+    // Foydalanuvchi pinni surgan bo'lsa — xarita sakramasin
+    if (skipNextFitRef.current) {
+      skipNextFitRef.current = false;
+      return;
+    }
 
     if (customFromCoords && customToCoords) {
       const bounds = new maplibregl.LngLatBounds();
