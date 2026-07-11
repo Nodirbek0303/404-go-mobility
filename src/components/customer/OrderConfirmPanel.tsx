@@ -15,6 +15,7 @@ interface OrderConfirmPanelProps {
   durationMin?: number;
   onConfirm: () => void;
   onClose: () => void;
+  submitting?: boolean;
 }
 
 export default function OrderConfirmPanel({
@@ -29,6 +30,7 @@ export default function OrderConfirmPanel({
   durationMin,
   onConfirm,
   onClose,
+  submitting = false,
 }: OrderConfirmPanelProps) {
   const t = {
     title: lang === "uz" ? "Buyurtmani tasdiqlash" : lang === "ru" ? "Подтверждение заказа" : "Confirm order",
@@ -122,9 +124,16 @@ export default function OrderConfirmPanel({
           <button
             type="button"
             onClick={onConfirm}
-            className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-600/30 active:scale-[0.98] transition"
+            disabled={submitting}
+            className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:pointer-events-none text-white font-bold text-sm shadow-lg shadow-blue-600/30 active:scale-[0.98] transition"
           >
-            {t.confirm}
+            {submitting
+              ? lang === "uz"
+                ? "Kutilmoqda..."
+                : lang === "ru"
+                  ? "Подождите..."
+                  : "Please wait..."
+              : t.confirm}
           </button>
         </div>
       </div>

@@ -314,7 +314,9 @@ export default function App() {
   // App Orders list (with simulation additions)
   const [orders, setOrders] = useState<Booking[]>(initialOrders);
   const [orderFilter, setOrderFilter] = useState<"active" | "completed" | "scheduled">("active");
-  const [selectedOrder, setSelectedOrder] = useState<Booking | null>(initialOrders[0]);
+  const [selectedOrder, setSelectedOrder] = useState<Booking | null>(
+    initialOrders.find((o) => o.status === "active") ?? null
+  );
   const [viewingHistoricalTrip, setViewingHistoricalTrip] = useState<Booking | null>(null);
 
   // Order Completed rating and feedback modal states
@@ -379,6 +381,9 @@ export default function App() {
   const [scheduledDateTime, setScheduledDateTime] = useState("");
   const paymentCallbackRef = useRef<((provider: PaymentProvider) => void) | null>(null);
   const pendingServerOrderRef = useRef<string | null>(null);
+  const bookingSubmittingRef = useRef(false);
+  const lastFinalizedBookingKeyRef = useRef<string | null>(null);
+  const [confirmingBooking, setConfirmingBooking] = useState(false);
   const { coords: liveCoords, tracking: liveTracking, startTracking } = useLiveLocation();
 
   useEffect(() => {
@@ -874,6 +879,9 @@ export default function App() {
 
   const submitDirectBooking = async () => {
     if (!directBookingService) return;
+    if (directBookingService === "taxi" && (showTaxiConfirm || bookingSubmittingRef.current || confirmingBooking)) {
+      return;
+    }
 
     const isSingle = SINGLE_LOCATION_SERVICES.includes(directBookingService);
     const isTaxiMapOnly = directBookingService === "taxi";
@@ -1168,7 +1176,20 @@ export default function App() {
     bookingOverride?: NonNullable<typeof pendingBooking>
   ) => {
     const booking = bookingOverride ?? pendingBooking;
-    if (!booking) return;
+    if (!booking) {
+      bookingSubmittingRef.current = false;
+      setConfirmingBooking(false);
+      return;
+    }
+
+    const bookingKey = `${booking.type}:${booking.from ?? ""}:${booking.to ?? ""}:${booking.price}`;
+    if (lastFinalizedBookingKeyRef.current === bookingKey) return;
+    lastFinalizedBookingKeyRef.current = bookingKey;
+    window.setTimeout(() => {
+      if (lastFinalizedBookingKeyRef.current === bookingKey) {
+        lastFinalizedBookingKeyRef.current = null;
+      }
+    }, 10000);
 
     let maxDeduct = 0;
     if (useCashbackAsPayment) {
@@ -1401,6 +1422,9 @@ export default function App() {
     setPendingBooking(null);
     setPendingServerOrderId(null);
     pendingServerOrderRef.current = null;
+    bookingSubmittingRef.current = false;
+    setConfirmingBooking(false);
+    setShowTaxiConfirm(false);
     setDirectBookingService(null);
     setPinMode(null);
     setGpsPickupActive(false);
@@ -1457,6 +1481,7 @@ export default function App() {
 
   const handleConfirmBooking = async () => {
     if (!pendingBooking) return;
+    if (bookingSubmittingRef.current || confirmingBooking) return;
     if (!authSession) {
       setShowAuthModal(true);
       return;
@@ -1500,6 +1525,8 @@ export default function App() {
       toCoords,
     };
     setPendingBooking(bookingSnapshot);
+    bookingSubmittingRef.current = true;
+    setConfirmingBooking(true);
 
     openPayment(bookingSnapshot.price, "booking", (provider) => finalizeBooking(provider, bookingSnapshot));
 
@@ -4818,7 +4845,7 @@ export default function App() {
 
             {/* Simulated Live Booking Dialog */}
             <AnimatePresence>
-              {pendingBooking && !(pendingBooking.type === "taxi" && showTaxiConfirm) && (
+              {pendingBooking && pendingBooking.type !== "taxi" && (
                 <motion.div
                   initial={{ opacity: 0, y: 100 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -5758,7 +5785,11 @@ export default function App() {
         amount={paymentAmount}
         orderId={pendingServerOrderId}
         open={showPaymentModal}
-        onClose={() => setShowPaymentModal(false)}
+        onClose={() => {
+          setShowPaymentModal(false);
+          bookingSubmittingRef.current = false;
+          setConfirmingBooking(false);
+        }}
         onSuccess={(provider) => {
           paymentCallbackRef.current?.(provider);
           paymentCallbackRef.current = null;
@@ -5784,12 +5815,14 @@ export default function App() {
               ? computeRouteMetrics(pendingBooking.fromCoords, pendingBooking.toCoords, "taxi").durationMin
               : undefined
           }
+          submitting={confirmingBooking}
           onClose={() => {
+            if (confirmingBooking) return;
             setShowTaxiConfirm(false);
             setPendingBooking(null);
           }}
           onConfirm={() => {
-            setShowTaxiConfirm(false);
+            if (bookingSubmittingRef.current || confirmingBooking) return;
             void handleConfirmBooking();
           }}
         />
