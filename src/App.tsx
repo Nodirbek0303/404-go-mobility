@@ -107,6 +107,7 @@ import {
   formatDistance,
   formatDuration,
   remainingToPickupMeters,
+  haversineKm,
 } from "./utils/geoCalc";
 
 type BookingType = Booking["type"];
@@ -145,6 +146,29 @@ function lookupLocationByText(text: string): { latitude: number; longitude: numb
   }
 
   return null;
+}
+
+function formatMapPointLabel(
+  lat: number,
+  lng: number,
+  language: Language,
+  point: "A" | "B" = "A"
+): string {
+  let nearestName: string | null = null;
+  let nearestKm = Infinity;
+  for (const loc of TASHKENT_LOCATIONS) {
+    const km = haversineKm({ latitude: lat, longitude: lng }, { latitude: loc.lat, longitude: loc.lng });
+    if (km < nearestKm) {
+      nearestKm = km;
+      nearestName = loc.name[language] || loc.name.uz;
+    }
+  }
+  if (nearestName && nearestKm < 0.6) return nearestName;
+  return language === "uz"
+    ? `${point} nuqta (${lat.toFixed(4)}, ${lng.toFixed(4)})`
+    : language === "ru"
+      ? `Точка ${point} (${lat.toFixed(4)}, ${lng.toFixed(4)})`
+      : `Point ${point} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
 }
 
 async function resolveLocationCoords(
@@ -572,6 +596,7 @@ export default function App() {
   const [customFromCoords, setCustomFromCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [customToCoords, setCustomToCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [gpsPickupActive, setGpsPickupActive] = useState(false);
+  const [mapPickStep, setMapPickStep] = useState<"pickup" | "dropoff" | "ready">("pickup");
   const [pinMode, setPinMode] = useState<"from" | "to" | null>(null);
   const [selectedCargoTruck, setSelectedCargoTruck] = useState(CARGO_TRUCKS[0].id);
   const [selectedDeliveryVehicle, setSelectedDeliveryVehicle] = useState(DELIVERY_VEHICLES[1].id);
@@ -587,16 +612,27 @@ export default function App() {
   }, [selectedOrder?.id, selectedOrder?.status, selectedOrder?.type, startTracking]);
 
   useEffect(() => {
+    if (directBookingService === "taxi") {
+      setMapPickStep("pickup");
+      setPinMode("from");
+      setCustomFromCoords(null);
+      setCustomToCoords(null);
+      setDirectFromText("");
+      setDirectToText("");
+      setGpsPickupActive(false);
+    }
+  }, [directBookingService]);
+
+  useEffect(() => {
     if (!gpsPickupActive || !liveCoords || !liveTracking) return;
     setCustomFromCoords({ latitude: liveCoords.latitude, longitude: liveCoords.longitude });
-    setDirectFromText(
-      lang === "uz"
-        ? `Mening joylashuvim (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
-        : lang === "ru"
-          ? `Моё местоположение (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
-          : `My location (${liveCoords.latitude.toFixed(4)}, ${liveCoords.longitude.toFixed(4)})`
-    );
-  }, [gpsPickupActive, liveCoords?.latitude, liveCoords?.longitude, liveTracking, lang]);
+    const label = formatMapPointLabel(liveCoords.latitude, liveCoords.longitude, lang, "A");
+    setDirectFromText(label);
+    if (directBookingService === "taxi") {
+      setMapPickStep("dropoff");
+      setPinMode("to");
+    }
+  }, [gpsPickupActive, liveCoords?.latitude, liveCoords?.longitude, liveTracking, lang, directBookingService]);
 
   const applyParkingLot = (id: string) => {
     const lot = PARKING_LOTS.find((p) => p.id === id);
@@ -630,14 +666,49 @@ export default function App() {
     }
   }, [directBookingService]);
 
-  const handleMapClick = (lat: number, lng: number, name: string) => {
+  const handleMapClick = (lat: number, lng: number, _name: string) => {
+    const label = formatMapPointLabel(lat, lng, lang);
+
+    if (directBookingService === "taxi") {
+      if (mapPickStep === "pickup" || pinMode === "from") {
+        setCustomFromCoords({ latitude: lat, longitude: lng });
+        setDirectFromText(formatMapPointLabel(lat, lng, lang, "A"));
+        setGpsPickupActive(false);
+        setMapPickStep("dropoff");
+        setPinMode("to");
+        speakText(
+          lang === "uz"
+            ? "A nuqta belgilandi. Endi xaritada B nuqtani — borish joyini bosing."
+            : lang === "ru"
+              ? "Точка A выбрана. Теперь нажмите точку B на карте."
+              : "Point A set. Now tap point B on the map."
+        );
+        return;
+      }
+      if (mapPickStep === "dropoff" || pinMode === "to") {
+        setCustomToCoords({ latitude: lat, longitude: lng });
+        setDirectToText(formatMapPointLabel(lat, lng, lang, "B"));
+        setMapPickStep("ready");
+        setPinMode(null);
+        speakText(
+          lang === "uz"
+            ? "B nuqta belgilandi. Buyurtma berishingiz mumkin!"
+            : lang === "ru"
+              ? "Точка B выбрана. Можно оформить заказ!"
+              : "Point B set. You can place your order!"
+        );
+        return;
+      }
+      return;
+    }
+
     if (pinMode === "from") {
-      setDirectFromText(name);
+      setDirectFromText(label);
       setCustomFromCoords({ latitude: lat, longitude: lng });
       setGpsPickupActive(false);
       setPinMode(null);
     } else if (pinMode === "to") {
-      setDirectToText(name);
+      setDirectToText(label);
       setCustomToCoords({ latitude: lat, longitude: lng });
       setPinMode(null);
     }
@@ -749,69 +820,89 @@ export default function App() {
   const submitDirectBooking = async () => {
     if (!directBookingService) return;
 
-    const fromLabel = directFromText.trim();
-    const toLabel = directToText.trim();
     const isSingle = SINGLE_LOCATION_SERVICES.includes(directBookingService);
+    const isTaxiMapOnly = directBookingService === "taxi";
 
-    if (!fromLabel) {
-      const err =
-        lang === "uz"
-          ? "Qayerdan (A nuqta) manzilini kiriting yoki xaritadan tanlang!"
-          : lang === "ru"
-            ? "Укажите точку отправления (A) на карте или в поле!"
-            : "Enter pickup (point A) or select on the map!";
-      alert(err);
-      speakText(err);
-      return;
+    let fromCoordsResolved = customFromCoords;
+    let toCoordsResolved = isSingle ? null : customToCoords;
+    let fromLabel = directFromText.trim();
+    let toLabel = directToText.trim();
+
+    if (isTaxiMapOnly) {
+      if (!fromCoordsResolved || !toCoordsResolved) {
+        const err =
+          lang === "uz"
+            ? "Xaritada A (taksi keladigan joy) va B (borish joyi) nuqtalarini belgilang!"
+            : lang === "ru"
+              ? "Отметьте на карте точку A (подача) и точку B (назначение)!"
+              : "Mark point A (pickup) and point B (destination) on the map!";
+        alert(err);
+        speakText(err);
+        return;
+      }
+      fromLabel = fromLabel || formatMapPointLabel(fromCoordsResolved.latitude, fromCoordsResolved.longitude, lang, "A");
+      toLabel = toLabel || formatMapPointLabel(toCoordsResolved.latitude, toCoordsResolved.longitude, lang, "B");
+    } else {
+      if (!fromLabel) {
+        const err =
+          lang === "uz"
+            ? "Qayerdan (A nuqta) manzilini kiriting yoki xaritadan tanlang!"
+            : lang === "ru"
+              ? "Укажите точку отправления (A) на карте или в поле!"
+              : "Enter pickup (point A) or select on the map!";
+        alert(err);
+        speakText(err);
+        return;
+      }
+
+      if (!isSingle && !toLabel) {
+        const err =
+          lang === "uz"
+            ? "Qayerga (B nuqta) manzilini kiriting yoki xaritadan tanlang!"
+            : lang === "ru"
+              ? "Укажите пункт назначения (B) на карте или в поле!"
+              : "Enter destination (point B) or select on the map!";
+        alert(err);
+        speakText(err);
+        return;
+      }
+
+      fromCoordsResolved = await resolveLocationCoords(fromLabel, customFromCoords, liveCoords);
+      toCoordsResolved = isSingle
+        ? null
+        : await resolveLocationCoords(toLabel, customToCoords ?? lookupLocationByText(toLabel), fromCoordsResolved ?? liveCoords);
+
+      if (!isSingle && !toCoordsResolved && toLabel) {
+        toCoordsResolved = await resolveLocationCoords(toLabel, null, fromCoordsResolved ?? liveCoords);
+      }
+
+      if (!fromCoordsResolved) {
+        const err =
+          lang === "uz"
+            ? "Boshlang'ich manzil topilmadi. Xaritadan pin qo'ying yoki ro'yxatdan tanlang."
+            : lang === "ru"
+              ? "Не удалось определить точку A."
+              : "Could not locate pickup.";
+        alert(err);
+        speakText(err);
+        return;
+      }
+
+      if (!isSingle && !toCoordsResolved) {
+        const err =
+          lang === "uz"
+            ? "Manzil (B nuqta) topilmadi. Xaritadan pin qo'ying."
+            : lang === "ru"
+              ? "Не удалось определить точку B."
+              : "Could not locate destination.";
+        alert(err);
+        speakText(err);
+        return;
+      }
+
+      setCustomFromCoords(fromCoordsResolved);
+      if (toCoordsResolved) setCustomToCoords(toCoordsResolved);
     }
-
-    if (!isSingle && !toLabel) {
-      const err =
-        lang === "uz"
-          ? "Qayerga (B nuqta) manzilini kiriting yoki xaritadan tanlang!"
-          : lang === "ru"
-            ? "Укажите пункт назначения (B) на карте или в поле!"
-            : "Enter destination (point B) or select on the map!";
-      alert(err);
-      speakText(err);
-      return;
-    }
-
-    const fromCoordsResolved = await resolveLocationCoords(fromLabel, customFromCoords, liveCoords);
-    let toCoordsResolved = isSingle
-      ? null
-      : await resolveLocationCoords(toLabel, customToCoords ?? lookupLocationByText(toLabel), fromCoordsResolved ?? liveCoords);
-
-    if (!isSingle && !toCoordsResolved && toLabel) {
-      toCoordsResolved = await resolveLocationCoords(toLabel, null, fromCoordsResolved ?? liveCoords);
-    }
-
-    if (!fromCoordsResolved) {
-      const err =
-        lang === "uz"
-          ? "Boshlang'ich manzil topilmadi. Xaritadan pin qo'ying, GPS tugmasini bosing yoki ro'yxatdan tanlang."
-          : lang === "ru"
-            ? "Не удалось определить точку A. Выберите на карте, GPS или из списка."
-            : "Could not locate pickup. Use map pin, GPS, or quick select.";
-      alert(err);
-      speakText(err);
-      return;
-    }
-
-    if (!isSingle && !toCoordsResolved) {
-      const err =
-        lang === "uz"
-          ? "Manzil (B nuqta) topilmadi. Xaritadan pin qo'ying yoki ro'yxatdan tanlang."
-          : lang === "ru"
-            ? "Не удалось определить точку B. Выберите на карте или из списка."
-            : "Could not locate destination. Use map pin or quick select.";
-      alert(err);
-      speakText(err);
-      return;
-    }
-
-    setCustomFromCoords(fromCoordsResolved);
-    if (toCoordsResolved) setCustomToCoords(toCoordsResolved);
 
     const metrics = computeRouteMetrics(
       fromCoordsResolved,
@@ -2736,6 +2827,137 @@ export default function App() {
                             </div>
                           )}
 
+                          {directBookingService === "taxi" ? (
+                            <>
+                              <div className="bg-teal-500/10 border border-teal-500/30 rounded-xl p-2.5 space-y-1">
+                                <p className="text-[10px] font-bold text-teal-400">
+                                  {lang === "uz"
+                                    ? "Xaritadan chaqirish — manzil yozish shart emas"
+                                    : lang === "ru"
+                                      ? "Вызов с карты — адрес вводить не нужно"
+                                      : "Call from map — no address typing needed"}
+                                </p>
+                                <p className="text-[9px] text-gray-300 leading-snug">
+                                  {mapPickStep === "pickup"
+                                    ? lang === "uz"
+                                      ? "1-qadam: Xaritada A nuqtani bosing — taksi qayerga kelsin"
+                                      : "Step 1: Tap point A on the map — where taxi picks you up"
+                                    : mapPickStep === "dropoff"
+                                      ? lang === "uz"
+                                        ? "2-qadam: Xaritada B nuqtani bosing — qayerga borasiz"
+                                        : "Step 2: Tap point B on the map — your destination"
+                                      : lang === "uz"
+                                        ? "Tayyor! Buyurtma berishingiz mumkin"
+                                        : "Ready! You can place your order"}
+                                </p>
+                              </div>
+
+                              <div className="h-64 rounded-xl overflow-hidden border border-teal-500/30 relative shadow-inner isolate z-0 cursor-crosshair">
+                                <SmartMap
+                                  compact={false}
+                                  pinMode={mapPickStep === "pickup" ? "from" : mapPickStep === "dropoff" ? "to" : null}
+                                  liveUserCoords={liveCoords}
+                                  liveTracking={liveTracking}
+                                  activeFrom={directFromText || (lang === "uz" ? "A — taksi keladi" : "A — pickup")}
+                                  activeTo={directToText || (lang === "uz" ? "B — borish joyi" : "B — destination")}
+                                  serviceMode="taxi"
+                                  showRoute={!!customFromCoords && !!customToCoords}
+                                  lang={lang}
+                                  customFromCoords={customFromCoords ?? liveCoords}
+                                  customToCoords={customToCoords}
+                                  onMapClick={handleMapClick}
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2 text-[9px]">
+                                <div className={`p-2 rounded-lg border ${customFromCoords ? "border-teal-400/50 bg-teal-400/5" : "border-slate-800 bg-slate-950"}`}>
+                                  <span className="text-teal-400 font-bold block mb-0.5">A · {lang === "uz" ? "Taksi keladi" : "Pickup"}</span>
+                                  <span className="text-gray-300 truncate block">
+                                    {customFromCoords ? directFromText : lang === "uz" ? "Xaritadan belgilang" : "Tap on map"}
+                                  </span>
+                                </div>
+                                <div className={`p-2 rounded-lg border ${customToCoords ? "border-amber-400/50 bg-amber-400/5" : "border-slate-800 bg-slate-950"}`}>
+                                  <span className="text-amber-400 font-bold block mb-0.5">B · {lang === "uz" ? "Borish joyi" : "Destination"}</span>
+                                  <span className="text-gray-300 truncate block">
+                                    {customToCoords ? directToText : lang === "uz" ? "Xaritadan belgilang" : "Tap on map"}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setGpsPickupActive(true);
+                                    startTracking();
+                                  }}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-teal-500/30 text-[9px] text-teal-400 hover:bg-teal-400/10"
+                                >
+                                  <Navigation className="w-3 h-3" />
+                                  {lang === "uz" ? "GPS — meni joyim" : "GPS — my location"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMapPickStep("pickup");
+                                    setPinMode("from");
+                                    setCustomFromCoords(null);
+                                    setDirectFromText("");
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg border border-slate-800 text-[9px] text-gray-400 hover:text-white"
+                                >
+                                  {lang === "uz" ? "A qayta" : "Reset A"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMapPickStep("dropoff");
+                                    setPinMode("to");
+                                    setCustomToCoords(null);
+                                    setDirectToText("");
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg border border-slate-800 text-[9px] text-gray-400 hover:text-white"
+                                >
+                                  {lang === "uz" ? "B qayta" : "Reset B"}
+                                </button>
+                              </div>
+
+                              <div className="space-y-1 pt-1">
+                                <span className="text-[9px] text-gray-500 font-mono tracking-wider block uppercase">
+                                  {lang === "uz" ? "Tezkor tanlash (xarita)" : "Quick pick on map"}
+                                </span>
+                                <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-none">
+                                  {TASHKENT_LOCATIONS.map((loc) => {
+                                    const locName = loc.name[lang as "uz" | "en" | "ru"] || loc.name.uz;
+                                    return (
+                                      <button
+                                        key={loc.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setGpsPickupActive(false);
+                                          if (mapPickStep === "pickup" || !customFromCoords) {
+                                            setDirectFromText(locName);
+                                            setCustomFromCoords({ latitude: loc.lat, longitude: loc.lng });
+                                            setMapPickStep("dropoff");
+                                            setPinMode("to");
+                                          } else {
+                                            setDirectToText(locName);
+                                            setCustomToCoords({ latitude: loc.lat, longitude: loc.lng });
+                                            setMapPickStep("ready");
+                                            setPinMode(null);
+                                          }
+                                        }}
+                                        className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-teal-500/30 text-[9px] text-gray-300 px-2 py-1 rounded-full whitespace-nowrap shrink-0"
+                                      >
+                                        {locName}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <>
                           {/* Field A: Starting point */}
                           <div className="space-y-1">
                             <label className="text-[10px] text-gray-400 font-medium">
@@ -2776,27 +2998,9 @@ export default function App() {
                               >
                                 {renderIcon("MapPin", "w-3.5 h-3.5")}
                               </button>
-                              {directBookingService === "taxi" && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setGpsPickupActive(true);
-                                    startTracking();
-                                  }}
-                                  className={`p-2 rounded-lg border transition ${
-                                    liveTracking
-                                      ? "bg-teal-400/20 text-teal-400 border-teal-400/50"
-                                      : "bg-slate-900 text-teal-400 border-slate-800 hover:border-teal-400/40"
-                                  }`}
-                                  title={lang === "uz" ? "GPS — jonli joylashuv" : lang === "ru" ? "GPS — текущее место" : "GPS — live location"}
-                                >
-                                  <Navigation className="w-3.5 h-3.5" />
-                                </button>
-                              )}
                             </div>
                           </div>
 
-                          {/* Field B: Destination */}
                           {!SINGLE_LOCATION_SERVICES.includes(directBookingService) && (
                             <div className="space-y-1">
                               <label className="text-[10px] text-gray-400 font-medium">
@@ -2836,7 +3040,6 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Real OSM map — A/B nuqtalar va marshrut */}
                           <div className="h-52 rounded-xl overflow-hidden border border-teal-500/20 relative shadow-inner mt-1 isolate z-0">
                             <SmartMap
                               compact={false}
@@ -2913,6 +3116,8 @@ export default function App() {
                             </div>
                             </div>
                           )}
+                            </>
+                          )}
 
                           {/* Coupon Selector */}
                           {activeCoupons.length > 0 && (
@@ -2976,10 +3181,12 @@ export default function App() {
                             {!SINGLE_LOCATION_SERVICES.includes(directBookingService) &&
                             (!customFromCoords || !customToCoords) ? (
                               <span className="text-[10px] text-amber-400 font-medium">
-                                {lang === "uz"
-                                  ? "A va B nuqtalarni tanlang"
-                                  : lang === "ru"
-                                    ? "Выберите A и B"
+                                {directBookingService === "taxi"
+                                  ? lang === "uz"
+                                    ? "Xaritada A va B nuqtalarni belgilang"
+                                    : "Mark A and B on the map"
+                                  : lang === "uz"
+                                    ? "A va B nuqtalarni tanlang"
                                     : "Select A and B points"}
                               </span>
                             ) : (
@@ -2994,8 +3201,10 @@ export default function App() {
                             <button
                               onClick={() => void submitDirectBooking()}
                               disabled={
-                                !directFromText.trim() ||
-                                (!SINGLE_LOCATION_SERVICES.includes(directBookingService) && !directToText.trim())
+                                directBookingService === "taxi"
+                                  ? !customFromCoords || !customToCoords
+                                  : !directFromText.trim() ||
+                                    (!SINGLE_LOCATION_SERVICES.includes(directBookingService) && !directToText.trim())
                               }
                               className="flex-grow nexgo-btn-primary text-xs py-2.5 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                             >
