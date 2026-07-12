@@ -15,6 +15,7 @@
     "api/geocode.ts": { "maxDuration": 20 },
     "api/route.ts": { "maxDuration": 20 },
     "api/realtime.ts": { "maxDuration": 60 },
-    "api/config.ts": { "maxDuration": 10 }
+    "api/config.ts": { "maxDuration": 10 },
+    "api/driver-auth.ts": { "maxDuration": 15 }
   }
 }
